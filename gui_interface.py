@@ -13,7 +13,7 @@ import pandas as pd
 import threading
 import queue
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Tuple
 import logging
 
 from keithley_driver import Keithley2634B, MeasurementSettings, SourceFunction, SenseFunction
