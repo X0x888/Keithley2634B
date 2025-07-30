@@ -1,0 +1,28 @@
+# Keithley 2634B IV Measurement System - Required Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core scientific computing
+numpy>=1.21.0
+pandas>=1.3.0
+matplotlib>=3.5.0
+
+# Instrument communication
+pyvisa>=1.11.0
+
+# Data analysis and export
+openpyxl>=3.0.0        # Excel file support
+scipy>=1.7.0           # Scientific computing
+
+# Optional: Enhanced GUI components
+# tkinter is included with Python, no need to install
+
+# Development and testing (optional)
+pytest>=6.0.0
+pytest-cov>=2.0.0
+
+# Documentation (optional)
+sphinx>=4.0.0
+sphinx-rtd-theme>=1.0.0
+
+# Note: VISA Runtime must be installed separately
+# Download from: https://www.ni.com/en-us/support/downloads/drivers/download.ni-visa.html
