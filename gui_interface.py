@@ -202,11 +202,11 @@ class MeasurementSettingsFrame(ParameterFrame):
         super().__init__(parent, "Measurement Settings")
         
         self.add_parameter("source_function", "Source Function:", "dcvolts", "combobox", ["dcvolts", "dcamps"])
-        self.add_parameter("sense_function", "Sense Function:", "dcamps", "combobox", ["dcvolts", "dcamps"])
+        self.add_parameter("sense_function", "Measure Function:", "dcamps", "combobox", ["dcvolts", "dcamps"])
         self.add_parameter("source_range", "Source Range:", "1.0")
-        self.add_parameter("sense_range", "Sense Range:", "0.001")
+        self.add_parameter("sense_range", "Measure Range:", "0.001")
         self.add_parameter("source_autorange", "Source Auto Range:", True, "checkbutton")
-        self.add_parameter("sense_autorange", "Sense Auto Range:", True, "checkbutton")
+        self.add_parameter("sense_autorange", "Measure Auto Range:", True, "checkbutton")
         self.add_parameter("compliance", "Compliance:", "0.001")
         self.add_parameter("nplc", "Integration Time (NPLC):", "1.0")
         self.add_parameter("filter_enable", "Enable Filter:", False, "checkbutton")
@@ -601,22 +601,31 @@ class MainApplication:
         
         # Left panel for controls (scrollable)
         left_container = ttk.Frame(main_paned)
-        left_canvas = tk.Canvas(left_container, width=400)
+        
+        # Create canvas and scrollbar
+        left_canvas = tk.Canvas(left_container, highlightthickness=0)
         left_scrollbar = ttk.Scrollbar(left_container, orient="vertical", command=left_canvas.yview)
         left_scrollable_frame = ttk.Frame(left_canvas)
         
         # Configure scrolling
-        left_scrollable_frame.bind(
-            "<Configure>",
-            lambda e: left_canvas.configure(scrollregion=left_canvas.bbox("all"))
-        )
+        def configure_scroll_region(event=None):
+            left_canvas.configure(scrollregion=left_canvas.bbox("all"))
         
-        left_canvas.create_window((0, 0), window=left_scrollable_frame, anchor="nw")
+        def configure_canvas_width(event):
+            # Make the scrollable frame fill the canvas width
+            canvas_width = event.width
+            left_canvas.itemconfig(canvas_window, width=canvas_width)
+        
+        left_scrollable_frame.bind("<Configure>", configure_scroll_region)
+        left_canvas.bind("<Configure>", configure_canvas_width)
+        
+        # Create window in canvas
+        canvas_window = left_canvas.create_window((0, 0), window=left_scrollable_frame, anchor="nw")
         left_canvas.configure(yscrollcommand=left_scrollbar.set)
         
         # Pack canvas and scrollbar
-        left_canvas.pack(side="left", fill="both", expand=True)
         left_scrollbar.pack(side="right", fill="y")
+        left_canvas.pack(side="left", fill="both", expand=True)
         
         # Add container to paned window
         main_paned.add(left_container, weight=1)
@@ -626,11 +635,25 @@ class MainApplication:
         
         # Enable mouse wheel scrolling
         def _on_mousewheel(event):
-            left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            if event.delta:
+                left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            else:
+                # For Linux
+                if event.num == 4:
+                    left_canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    left_canvas.yview_scroll(1, "units")
         
-        left_canvas.bind("<MouseWheel>", _on_mousewheel)  # Windows
-        left_canvas.bind("<Button-4>", lambda e: left_canvas.yview_scroll(-1, "units"))  # Linux
-        left_canvas.bind("<Button-5>", lambda e: left_canvas.yview_scroll(1, "units"))   # Linux
+        # Bind mouse wheel events to canvas and all child widgets
+        def bind_mousewheel(widget):
+            widget.bind("<MouseWheel>", _on_mousewheel)  # Windows
+            widget.bind("<Button-4>", _on_mousewheel)    # Linux
+            widget.bind("<Button-5>", _on_mousewheel)    # Linux
+            for child in widget.winfo_children():
+                bind_mousewheel(child)
+        
+        # Apply mouse wheel binding after GUI is built
+        self.root.after(100, lambda: bind_mousewheel(left_scrollable_frame))
         
         # Right panel for plots
         right_frame = ttk.Frame(main_paned)
@@ -816,10 +839,19 @@ class MainApplication:
                 filter_count=int(settings_values.get("filter_count", 10))
             )
             
-            # Apply settings to instrument
-            self.keithley.configure_measurement(settings)
-            self.measurement_settings_frame.set_settings_applied(True)
-            messagebox.showinfo("Success", "Measurement settings applied to instrument")
+            # Apply settings to instrument with error checking
+            success, errors = self.keithley.configure_measurement_with_error_check(settings)
+            
+            if success:
+                self.measurement_settings_frame.set_settings_applied(True)
+                messagebox.showinfo("Success", "Measurement settings applied to instrument successfully!")
+            else:
+                error_msg = "Configuration failed with errors:\n\n" + "\n".join(errors[:5])  # Show first 5 errors
+                if len(errors) > 5:
+                    error_msg += f"\n... and {len(errors) - 5} more errors"
+                
+                self.measurement_settings_frame.set_settings_applied(False, f"Errors: {len(errors)} found")
+                messagebox.showerror("Configuration Errors", error_msg)
             
         except Exception as e:
             self.measurement_settings_frame.set_settings_applied(False, f"Error: {str(e)[:30]}...")

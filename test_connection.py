@@ -76,6 +76,16 @@ def test_connection():
             print(f"  Compliance: {current_settings.compliance}")
             print(f"  NPLC: {current_settings.nplc}")
             
+            # Test error checking
+            print("Testing error checking...")
+            errors = keithley.check_errors()
+            if errors:
+                print(f"⚠ Found {len(errors)} errors in queue:")
+                for error in errors[:3]:  # Show first 3
+                    print(f"  - {error}")
+            else:
+                print("✓ No errors in instrument queue")
+            
             print("✓ All basic operations working")
             
         except Exception as e:

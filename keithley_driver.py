@@ -23,7 +23,7 @@ class SourceFunction(Enum):
 
 
 class SenseFunction(Enum):
-    """Sense function enumeration"""
+    """Sense function enumeration - configures what the SMU senses/detects"""
     VOLTAGE = "dcvolts"
     CURRENT = "dcamps"
 
@@ -167,6 +167,9 @@ class Keithley2634B:
                 logger.error(f"Make sure channel '{self.channel}' exists on this instrument")
                 # Don't fail the connection for this - the channel might just be off
             
+            # Clear any error queue
+            self.clear_errors()
+            
             logger.info("Connection successful!")
             return True
             
@@ -237,43 +240,76 @@ class Keithley2634B:
         """
         self.settings = settings
         
-        # Configure source function
-        self.write(f"{self.smu_name}.source.func = {self.smu_name}.OUTPUT_{settings.source_function.value.upper()}")
+        logger.info("Configuring measurement settings...")
         
-        # Configure sense function  
-        self.write(f"{self.smu_name}.sense = {self.smu_name}.SENSE_{settings.sense_function.value.upper()}")
-        
-        # Configure ranges
-        if settings.source_autorange:
-            self.write(f"{self.smu_name}.source.autorange{settings.source_function.value[2:]} = {self.smu_name}.AUTORANGE_ON")
-        else:
-            self.write(f"{self.smu_name}.source.range{settings.source_function.value[2:]} = {settings.source_range}")
+        try:
+            # Configure source function (correct TSP syntax)
+            if settings.source_function == SourceFunction.VOLTAGE:
+                self.write(f"{self.smu_name}.source.func = {self.smu_name}.OUTPUT_DCVOLTS")
+            else:
+                self.write(f"{self.smu_name}.source.func = {self.smu_name}.OUTPUT_DCAMPS")
             
-        if settings.sense_autorange:
-            self.write(f"{self.smu_name}.measure.autorange{settings.sense_function.value[2:]} = {self.smu_name}.AUTORANGE_ON")
-        else:
-            self.write(f"{self.smu_name}.measure.range{settings.sense_function.value[2:]} = {settings.sense_range}")
-        
-        # Set compliance
-        if settings.source_function == SourceFunction.VOLTAGE:
-            self.write(f"{self.smu_name}.source.limiti = {settings.compliance}")
-        else:
-            self.write(f"{self.smu_name}.source.limitv = {settings.compliance}")
-        
-        # Configure integration time
-        self.write(f"{self.smu_name}.measure.nplc = {settings.nplc}")
-        
-        # Configure filter
-        if settings.filter_enable:
-            self.write(f"{self.smu_name}.measure.filter.enable = {self.smu_name}.FILTER_ON")
-            self.write(f"{self.smu_name}.measure.filter.count = {settings.filter_count}")
-        else:
-            self.write(f"{self.smu_name}.measure.filter.enable = {self.smu_name}.FILTER_OFF")
-        
-        # Configure output off mode
-        self.write(f"{self.smu_name}.source.offmode = {self.smu_name}.OUTPUT_{settings.output_off_mode.upper()}")
-        
-        logger.info("Measurement configuration completed")
+            # Configure sense function (correct TSP syntax)
+            if settings.sense_function == SenseFunction.CURRENT:
+                self.write(f"{self.smu_name}.sense = {self.smu_name}.SENSE_DCAMPS")
+            else:
+                self.write(f"{self.smu_name}.sense = {self.smu_name}.SENSE_DCVOLTS")
+            
+            # Configure source ranges and autorange
+            if settings.source_function == SourceFunction.VOLTAGE:
+                if settings.source_autorange:
+                    self.write(f"{self.smu_name}.source.autorangev = {self.smu_name}.AUTORANGE_ON")
+                else:
+                    self.write(f"{self.smu_name}.source.autorangev = {self.smu_name}.AUTORANGE_OFF")
+                    self.write(f"{self.smu_name}.source.rangev = {settings.source_range}")
+            else:
+                if settings.source_autorange:
+                    self.write(f"{self.smu_name}.source.autorangei = {self.smu_name}.AUTORANGE_ON")
+                else:
+                    self.write(f"{self.smu_name}.source.autorangei = {self.smu_name}.AUTORANGE_OFF")
+                    self.write(f"{self.smu_name}.source.rangei = {settings.source_range}")
+            
+            # Configure sense ranges and autorange
+            if settings.sense_function == SenseFunction.CURRENT:
+                if settings.sense_autorange:
+                    self.write(f"{self.smu_name}.measure.autorangei = {self.smu_name}.AUTORANGE_ON")
+                else:
+                    self.write(f"{self.smu_name}.measure.autorangei = {self.smu_name}.AUTORANGE_OFF")
+                    self.write(f"{self.smu_name}.measure.rangei = {settings.sense_range}")
+            else:
+                if settings.sense_autorange:
+                    self.write(f"{self.smu_name}.measure.autorangev = {self.smu_name}.AUTORANGE_ON")
+                else:
+                    self.write(f"{self.smu_name}.measure.autorangev = {self.smu_name}.AUTORANGE_OFF")
+                    self.write(f"{self.smu_name}.measure.rangev = {settings.sense_range}")
+            
+            # Set compliance limits
+            if settings.source_function == SourceFunction.VOLTAGE:
+                self.write(f"{self.smu_name}.source.limiti = {settings.compliance}")
+            else:
+                self.write(f"{self.smu_name}.source.limitv = {settings.compliance}")
+            
+            # Configure integration time (NPLC)
+            self.write(f"{self.smu_name}.measure.nplc = {settings.nplc}")
+            
+            # Configure digital filter
+            if settings.filter_enable:
+                self.write(f"{self.smu_name}.measure.filter.enable = {self.smu_name}.FILTER_ON")
+                self.write(f"{self.smu_name}.measure.filter.count = {settings.filter_count}")
+            else:
+                self.write(f"{self.smu_name}.measure.filter.enable = {self.smu_name}.FILTER_OFF")
+            
+            # Configure output off mode
+            self.write(f"{self.smu_name}.source.offmode = {self.smu_name}.OUTPUT_NORMAL")
+            
+            # Small delay to let settings settle
+            time.sleep(0.1)
+            
+            logger.info("Measurement configuration completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to configure measurement: {e}")
+            raise
     
     def output_on(self):
         """Turn output on"""
@@ -493,6 +529,71 @@ class Keithley2634B:
         except Exception as e:
             logger.error(f"Failed to read settings: {e}")
             raise
+    
+    def check_errors(self) -> List[str]:
+        """
+        Check for instrument errors
+        
+        Returns:
+            List of error messages
+        """
+        if not self.is_connected:
+            return ["Instrument not connected"]
+        
+        errors = []
+        try:
+            # Check error queue
+            while True:
+                error_response = self.query("print(errorqueue.next())")
+                if "0" in error_response and "Queue Is Empty" in error_response:
+                    break
+                errors.append(error_response.strip())
+                if len(errors) > 10:  # Prevent infinite loop
+                    break
+        except Exception as e:
+            logger.error(f"Error checking error queue: {e}")
+            errors.append(f"Failed to check errors: {e}")
+        
+        return errors
+    
+    def clear_errors(self):
+        """Clear instrument error queue"""
+        if not self.is_connected:
+            return
+        
+        try:
+            self.write("errorqueue.clear()")
+            logger.info("Error queue cleared")
+        except Exception as e:
+            logger.error(f"Failed to clear error queue: {e}")
+    
+    def configure_measurement_with_error_check(self, settings: MeasurementSettings) -> Tuple[bool, List[str]]:
+        """
+        Configure measurement and check for errors
+        
+        Returns:
+            Tuple of (success, error_list)
+        """
+        try:
+            # Clear errors before configuration
+            self.clear_errors()
+            
+            # Configure measurement
+            self.configure_measurement(settings)
+            
+            # Check for errors after configuration
+            errors = self.check_errors()
+            
+            if errors:
+                logger.warning(f"Configuration completed with errors: {errors}")
+                return False, errors
+            else:
+                logger.info("Configuration completed successfully with no errors")
+                return True, []
+                
+        except Exception as e:
+            logger.error(f"Configuration failed with exception: {e}")
+            return False, [str(e)]
 
 
 # Example usage and testing
