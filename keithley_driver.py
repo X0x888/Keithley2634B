@@ -481,7 +481,7 @@ class Keithley2634B:
                 source_function = SourceFunction.CURRENT
             
             # Read measure function (what is being measured)
-            measure_func = self.query(f"print({self.smu_name}.measure.func)")
+            measure_func = self.query(f"print(display.{self.smu_name}.measure.func)")
             if "1" in measure_func:  # MEASURE_DCAMPS = 1
                 sense_function = SenseFunction.CURRENT
             else:
@@ -635,13 +635,17 @@ class Keithley2634B:
         except Exception as e:
             all_errors.append(f"Source function exception: {e}")
         
-        # Step 2: Configure measure function SECOND
+        # Step 2: Configure measure function SECOND (using correct display.smua.measure.func)
         try:
             logger.info(f"Step 2: Configuring measure function to {settings.sense_function.value}")
+            
+            # Use the correct TSP command from manual: display.smua.measure.func
             if settings.sense_function == SenseFunction.CURRENT:
-                self.write(f"{self.smu_name}.measure.func = {self.smu_name}.MEASURE_DCAMPS")
+                logger.info("Setting measure function to current using display.smua.measure.func...")
+                self.write(f"display.{self.smu_name}.measure.func = display.MEASURE_DCAMPS")
             else:
-                self.write(f"{self.smu_name}.measure.func = {self.smu_name}.MEASURE_DCVOLTS")
+                logger.info("Setting measure function to voltage using display.smua.measure.func...")
+                self.write(f"display.{self.smu_name}.measure.func = display.MEASURE_DCVOLTS")
             
             time.sleep(0.1)  # Let it settle
             step_errors = self.check_errors()
@@ -649,15 +653,16 @@ class Keithley2634B:
                 all_errors.extend([f"Measure function: {e}" for e in step_errors])
                 logger.warning(f"Measure function configuration errors: {step_errors}")
             else:
-                logger.info("✓ Measure function configured successfully")
+                logger.info("✓ Measure function configured successfully using display command")
+                
         except Exception as e:
             all_errors.append(f"Measure function exception: {e}")
         
-        # Step 3: Configure ranges BEFORE compliance (ranges affect valid compliance values)
+        # Step 3: Configure ranges (skip measure ranges if already set in Step 2)
         try:
-            logger.info("Step 3: Configuring ranges...")
+            logger.info("Step 3: Configuring remaining ranges...")
             
-            # Source ranges
+            # Source ranges (always configure these)
             if settings.source_function == SourceFunction.VOLTAGE:
                 if settings.source_autorange:
                     logger.info("Setting source voltage autorange ON")
@@ -680,27 +685,25 @@ class Keithley2634B:
                     validated_range = self.validate_current_range(settings.source_range)
                     self.write(f"{self.smu_name}.source.rangei = {validated_range}")
             
-            # Measure ranges
+            # Measure ranges (only if not using autorange from Step 2 fallback)
             if settings.sense_function == SenseFunction.CURRENT:
-                if settings.sense_autorange:
-                    logger.info("Setting measure current autorange ON")
-                    self.write(f"{self.smu_name}.measure.autorangei = {self.smu_name}.AUTORANGE_ON")
-                else:
+                if not settings.sense_autorange:  # Only set specific range if not auto
                     logger.info(f"Setting measure current range to {settings.sense_range}A")
                     self.write(f"{self.smu_name}.measure.autorangei = {self.smu_name}.AUTORANGE_OFF")
                     time.sleep(0.05)
                     validated_range = self.validate_current_range(settings.sense_range)
                     self.write(f"{self.smu_name}.measure.rangei = {validated_range}")
-            else:
-                if settings.sense_autorange:
-                    logger.info("Setting measure voltage autorange ON")
-                    self.write(f"{self.smu_name}.measure.autorangev = {self.smu_name}.AUTORANGE_ON")
                 else:
+                    logger.info("Measure current autorange already set (or will use autorange)")
+            else:
+                if not settings.sense_autorange:  # Only set specific range if not auto
                     logger.info(f"Setting measure voltage range to {settings.sense_range}V")
                     self.write(f"{self.smu_name}.measure.autorangev = {self.smu_name}.AUTORANGE_OFF")
                     time.sleep(0.05)
                     validated_range = self.validate_voltage_range(settings.sense_range)
                     self.write(f"{self.smu_name}.measure.rangev = {validated_range}")
+                else:
+                    logger.info("Measure voltage autorange already set (or will use autorange)")
             
             time.sleep(0.1)
             step_errors = self.check_errors()

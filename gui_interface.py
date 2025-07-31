@@ -111,7 +111,7 @@ class CommandConsoleDialog:
             ("Reset", "*RST"),
             ("Get Output State", "print(smua.source.output)"),
             ("Get Source Level", "print(smua.source.levelv)"),
-            ("Get Measure Function", "print(smua.measure.func)")
+                            ("Get Measure Function", "print(display.smua.measure.func)")
         ]
         
         for i, (label, command) in enumerate(quick_commands):
@@ -142,8 +142,8 @@ class CommandConsoleDialog:
         self.append_output("Use Up/Down arrows to navigate command history")
         self.append_output("Examples:")
         self.append_output("  Write: smua.source.levelv = 1.0")
-        self.append_output("  Write: smua.measure.func = 1  (measure current)")
-        self.append_output("  Query: print(smua.measure.func)")
+        self.append_output("  Write: display.smua.measure.func = display.MEASURE_DCAMPS")
+        self.append_output("  Query: print(display.smua.measure.func)")
         self.append_output("  Query: print(smua.measure.nplc)")
         self.append_output("")
     
