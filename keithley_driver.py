@@ -594,7 +594,7 @@ class Keithley2634B:
     
     def configure_measurement_stepwise(self, settings: MeasurementSettings) -> Tuple[bool, List[str]]:
         """
-        Configure measurement step by step with individual error checking
+        Configure measurement step by step with proper sequencing and validation
         
         Returns:
             Tuple of (success, error_list)
@@ -602,77 +602,214 @@ class Keithley2634B:
         self.settings = settings
         all_errors = []
         
-        logger.info("Configuring measurement settings step by step...")
+        logger.info("Configuring measurement settings with smart sequencing...")
         
-        # Step 1: Configure source function
+        # CRITICAL: Ensure output is OFF before making changes
         try:
+            logger.info("Step 0: Ensuring output is OFF before configuration")
+            self.write(f"{self.smu_name}.source.output = {self.smu_name}.OUTPUT_OFF")
+            time.sleep(0.1)  # Let it settle
+            step_errors = self.check_errors()
+            if step_errors:
+                all_errors.extend([f"Output OFF: {e}" for e in step_errors])
+            else:
+                logger.info("Output turned OFF successfully")
+        except Exception as e:
+            all_errors.append(f"Output OFF exception: {e}")
+        
+        # Step 1: Configure source function FIRST
+        try:
+            logger.info(f"Step 1: Configuring source function to {settings.source_function.value}")
             if settings.source_function == SourceFunction.VOLTAGE:
                 self.write(f"{self.smu_name}.source.func = {self.smu_name}.OUTPUT_DCVOLTS")
             else:
                 self.write(f"{self.smu_name}.source.func = {self.smu_name}.OUTPUT_DCAMPS")
             
+            time.sleep(0.1)  # Let it settle
             step_errors = self.check_errors()
             if step_errors:
                 all_errors.extend([f"Source function: {e}" for e in step_errors])
                 logger.warning(f"Source function configuration errors: {step_errors}")
             else:
-                logger.info("Source function configured successfully")
+                logger.info("✓ Source function configured successfully")
         except Exception as e:
             all_errors.append(f"Source function exception: {e}")
         
-        # Step 2: Configure measure function
+        # Step 2: Configure measure function SECOND
         try:
+            logger.info(f"Step 2: Configuring measure function to {settings.sense_function.value}")
             if settings.sense_function == SenseFunction.CURRENT:
                 self.write(f"{self.smu_name}.measure.func = {self.smu_name}.MEASURE_DCAMPS")
             else:
                 self.write(f"{self.smu_name}.measure.func = {self.smu_name}.MEASURE_DCVOLTS")
             
+            time.sleep(0.1)  # Let it settle
             step_errors = self.check_errors()
             if step_errors:
                 all_errors.extend([f"Measure function: {e}" for e in step_errors])
                 logger.warning(f"Measure function configuration errors: {step_errors}")
             else:
-                logger.info("Measure function configured successfully")
+                logger.info("✓ Measure function configured successfully")
         except Exception as e:
             all_errors.append(f"Measure function exception: {e}")
         
-        # Step 3: Configure compliance (this is often successful)
+        # Step 3: Configure ranges BEFORE compliance (ranges affect valid compliance values)
         try:
-            if settings.source_function == SourceFunction.VOLTAGE:
-                self.write(f"{self.smu_name}.source.limiti = {settings.compliance}")
-            else:
-                self.write(f"{self.smu_name}.source.limitv = {settings.compliance}")
+            logger.info("Step 3: Configuring ranges...")
             
+            # Source ranges
+            if settings.source_function == SourceFunction.VOLTAGE:
+                if settings.source_autorange:
+                    logger.info("Setting source voltage autorange ON")
+                    self.write(f"{self.smu_name}.source.autorangev = {self.smu_name}.AUTORANGE_ON")
+                else:
+                    logger.info(f"Setting source voltage range to {settings.source_range}V")
+                    self.write(f"{self.smu_name}.source.autorangev = {self.smu_name}.AUTORANGE_OFF")
+                    time.sleep(0.05)
+                    # Validate and set range
+                    validated_range = self.validate_voltage_range(settings.source_range)
+                    self.write(f"{self.smu_name}.source.rangev = {validated_range}")
+            else:
+                if settings.source_autorange:
+                    logger.info("Setting source current autorange ON")
+                    self.write(f"{self.smu_name}.source.autorangei = {self.smu_name}.AUTORANGE_ON")
+                else:
+                    logger.info(f"Setting source current range to {settings.source_range}A")
+                    self.write(f"{self.smu_name}.source.autorangei = {self.smu_name}.AUTORANGE_OFF")
+                    time.sleep(0.05)
+                    validated_range = self.validate_current_range(settings.source_range)
+                    self.write(f"{self.smu_name}.source.rangei = {validated_range}")
+            
+            # Measure ranges
+            if settings.sense_function == SenseFunction.CURRENT:
+                if settings.sense_autorange:
+                    logger.info("Setting measure current autorange ON")
+                    self.write(f"{self.smu_name}.measure.autorangei = {self.smu_name}.AUTORANGE_ON")
+                else:
+                    logger.info(f"Setting measure current range to {settings.sense_range}A")
+                    self.write(f"{self.smu_name}.measure.autorangei = {self.smu_name}.AUTORANGE_OFF")
+                    time.sleep(0.05)
+                    validated_range = self.validate_current_range(settings.sense_range)
+                    self.write(f"{self.smu_name}.measure.rangei = {validated_range}")
+            else:
+                if settings.sense_autorange:
+                    logger.info("Setting measure voltage autorange ON")
+                    self.write(f"{self.smu_name}.measure.autorangev = {self.smu_name}.AUTORANGE_ON")
+                else:
+                    logger.info(f"Setting measure voltage range to {settings.sense_range}V")
+                    self.write(f"{self.smu_name}.measure.autorangev = {self.smu_name}.AUTORANGE_OFF")
+                    time.sleep(0.05)
+                    validated_range = self.validate_voltage_range(settings.sense_range)
+                    self.write(f"{self.smu_name}.measure.rangev = {validated_range}")
+            
+            time.sleep(0.1)
+            step_errors = self.check_errors()
+            if step_errors:
+                all_errors.extend([f"Ranges: {e}" for e in step_errors])
+                logger.warning(f"Range configuration errors: {step_errors}")
+            else:
+                logger.info("✓ Ranges configured successfully")
+        except Exception as e:
+            all_errors.append(f"Range configuration exception: {e}")
+        
+        # Step 4: Configure compliance AFTER ranges (compliance depends on current ranges)
+        try:
+            logger.info("Step 4: Configuring compliance...")
+            if settings.source_function == SourceFunction.VOLTAGE:
+                # Validate current compliance for voltage sourcing
+                validated_compliance = self.validate_current_compliance(settings.compliance)
+                logger.info(f"Setting current compliance to {validated_compliance}A")
+                self.write(f"{self.smu_name}.source.limiti = {validated_compliance}")
+            else:
+                # Validate voltage compliance for current sourcing
+                validated_compliance = self.validate_voltage_compliance(settings.compliance)
+                logger.info(f"Setting voltage compliance to {validated_compliance}V")
+                self.write(f"{self.smu_name}.source.limitv = {validated_compliance}")
+            
+            time.sleep(0.1)
             step_errors = self.check_errors()
             if step_errors:
                 all_errors.extend([f"Compliance: {e}" for e in step_errors])
+                logger.warning(f"Compliance configuration errors: {step_errors}")
             else:
-                logger.info("Compliance configured successfully")
+                logger.info("✓ Compliance configured successfully")
         except Exception as e:
             all_errors.append(f"Compliance exception: {e}")
         
-        # Step 4: Configure NPLC (usually safe)
+        # Step 5: Configure NPLC (usually safe)
         try:
-            self.write(f"{self.smu_name}.measure.nplc = {settings.nplc}")
+            logger.info(f"Step 5: Configuring NPLC to {settings.nplc}")
+            validated_nplc = max(0.001, min(25, settings.nplc))  # Valid range for 2634B
+            self.write(f"{self.smu_name}.measure.nplc = {validated_nplc}")
+            
+            time.sleep(0.1)
             step_errors = self.check_errors()
             if step_errors:
                 all_errors.extend([f"NPLC: {e}" for e in step_errors])
             else:
-                logger.info("NPLC configured successfully")
+                logger.info("✓ NPLC configured successfully")
         except Exception as e:
             all_errors.append(f"NPLC exception: {e}")
         
-        # Step 5: Skip autorange for now (often causes issues)
-        logger.info("Skipping autorange configuration to avoid read-only errors")
+        # Step 6: Configure filter (if enabled)
+        if settings.filter_enable:
+            try:
+                logger.info(f"Step 6: Configuring digital filter (count: {settings.filter_count})")
+                validated_count = max(1, min(100, settings.filter_count))  # Valid range
+                self.write(f"{self.smu_name}.measure.filter.count = {validated_count}")
+                time.sleep(0.05)
+                self.write(f"{self.smu_name}.measure.filter.enable = {self.smu_name}.FILTER_ON")
+                
+                time.sleep(0.1)
+                step_errors = self.check_errors()
+                if step_errors:
+                    all_errors.extend([f"Filter: {e}" for e in step_errors])
+                else:
+                    logger.info("✓ Digital filter configured successfully")
+            except Exception as e:
+                all_errors.append(f"Filter exception: {e}")
+        else:
+            try:
+                logger.info("Step 6: Disabling digital filter")
+                self.write(f"{self.smu_name}.measure.filter.enable = {self.smu_name}.FILTER_OFF")
+                time.sleep(0.1)
+                step_errors = self.check_errors()
+                if step_errors:
+                    all_errors.extend([f"Filter disable: {e}" for e in step_errors])
+                else:
+                    logger.info("✓ Digital filter disabled successfully")
+            except Exception as e:
+                all_errors.append(f"Filter disable exception: {e}")
         
-        # Step 6: Skip filter for now
-        logger.info("Skipping filter configuration to avoid potential errors")
-        
-        # Return results
+        # Final step: Log summary
         if all_errors:
+            logger.warning(f"Configuration completed with {len(all_errors)} errors")
             return False, all_errors
         else:
+            logger.info("✓ All configuration steps completed successfully!")
             return True, []
+    
+    def validate_voltage_range(self, voltage: float) -> float:
+        """Validate and return closest valid voltage range"""
+        valid_ranges = [0.2, 2, 20, 200]  # 2634B voltage ranges
+        return min(valid_ranges, key=lambda x: abs(x - abs(voltage)))
+    
+    def validate_current_range(self, current: float) -> float:
+        """Validate and return closest valid current range"""
+        valid_ranges = [1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 1.5]  # 2634B current ranges
+        return min(valid_ranges, key=lambda x: abs(x - abs(current)))
+    
+    def validate_current_compliance(self, current: float) -> float:
+        """Validate current compliance value"""
+        # Current compliance must be within instrument limits
+        max_current = 1.5  # 2634B max current
+        return max(1e-12, min(max_current, abs(current)))
+    
+    def validate_voltage_compliance(self, voltage: float) -> float:
+        """Validate voltage compliance value"""
+        # Voltage compliance must be within instrument limits
+        max_voltage = 200  # 2634B max voltage
+        return max(1e-6, min(max_voltage, abs(voltage)))
 
 
 # Example usage and testing
