@@ -737,10 +737,37 @@ class MonitorParametersFrame(ParameterFrame):
 
 
 class PlotFrame(ttk.Frame):
-    """Frame for real-time plotting"""
+    """Frame for real-time plotting with sweep-based display modes"""
     
     def __init__(self, parent):
         super().__init__(parent)
+        
+        # Control panel for sweep display options
+        control_panel = ttk.Frame(self)
+        control_panel.pack(fill="x", padx=5, pady=5)
+        
+        # Display mode selection
+        mode_frame = ttk.LabelFrame(control_panel, text="Display Mode", padding="5")
+        mode_frame.pack(side="left", padx=(0, 10))
+        
+        self.display_mode = tk.StringVar(value="all")
+        ttk.Radiobutton(mode_frame, text="All Data", variable=self.display_mode, 
+                       value="all", command=self.refresh_plots).pack(side="left", padx=5)
+        ttk.Radiobutton(mode_frame, text="Current Sweep", variable=self.display_mode, 
+                       value="current", command=self.refresh_plots).pack(side="left", padx=5)
+        ttk.Radiobutton(mode_frame, text="Select Sweeps", variable=self.display_mode, 
+                       value="select", command=self.refresh_plots).pack(side="left", padx=5)
+        
+        # Sweep selection frame
+        self.sweep_frame = ttk.LabelFrame(control_panel, text="Sweep Selection", padding="5")
+        self.sweep_frame.pack(side="left", padx=(0, 10))
+        
+        # Auto-scroll option
+        auto_frame = ttk.Frame(control_panel)
+        auto_frame.pack(side="right")
+        self.auto_follow = tk.BooleanVar(value=True)
+        ttk.Checkbutton(auto_frame, text="Auto-follow current sweep", 
+                       variable=self.auto_follow).pack()
         
         # Create matplotlib figure
         self.figure = Figure(figsize=(10, 6), dpi=100)
@@ -757,65 +784,201 @@ class PlotFrame(ttk.Frame):
         
         self.ax1.set_xlabel("Voltage (V)")
         self.ax1.set_ylabel("Current (A)")
+        self.ax1.set_title("I-V Characteristics")
         self.ax1.grid(True, alpha=0.3)
         
         self.ax2.set_xlabel("Time (s)")
         self.ax2.set_ylabel("Current (A)")
+        self.ax2.set_title("Time Series")
         self.ax2.grid(True, alpha=0.3)
         
-        # Data storage for plotting
-        self.iv_data = {'voltage': [], 'current': []}
-        self.time_data = {'time': [], 'current': []}
-        self.start_time = None
-        
-        # Plot lines
-        self.iv_line, = self.ax1.plot([], [], 'b-', linewidth=1.5)
-        self.time_line, = self.ax2.plot([], [], 'r-', linewidth=1.5)
+        # Enhanced data storage for sweep-based plotting
+        self.sweep_data = {}  # {sweep_number: {'voltage': [], 'current': [], 'time': []}}
+        self.current_sweep = None
+        self.sweep_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', 
+                           '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+        self.plot_lines = {}  # {sweep_number: {'iv_line': line, 'time_line': line}}
+        self.sweep_checkboxes = {}  # {sweep_number: checkbox_var}
         
         self.figure.tight_layout()
     
     def clear_plots(self):
         """Clear all plot data"""
-        self.iv_data = {'voltage': [], 'current': []}
-        self.time_data = {'time': [], 'current': []}
-        self.start_time = None
+        # Clear sweep data
+        self.sweep_data = {}
+        self.current_sweep = None
         
-        self.iv_line.set_data([], [])
-        self.time_line.set_data([], [])
+        # Clear plot lines
+        for sweep_num, lines in self.plot_lines.items():
+            lines['iv_line'].remove()
+            lines['time_line'].remove()
+        self.plot_lines = {}
         
-        self.ax1.relim()
-        self.ax1.autoscale()
-        self.ax2.relim()
-        self.ax2.autoscale()
+        # Clear sweep checkboxes
+        for checkbox_var in self.sweep_checkboxes.values():
+            checkbox_var.set(False)
+        for widget in self.sweep_frame.winfo_children():
+            widget.destroy()
+        self.sweep_checkboxes = {}
+        
+        # Clear axes
+        self.ax1.clear()
+        self.ax2.clear()
+        
+        # Reset axes properties
+        self.ax1.set_xlabel("Voltage (V)")
+        self.ax1.set_ylabel("Current (A)")
+        self.ax1.set_title("I-V Characteristics")
+        self.ax1.grid(True, alpha=0.3)
+        
+        self.ax2.set_xlabel("Time (s)")
+        self.ax2.set_ylabel("Current (A)")
+        self.ax2.set_title("Time Series")
+        self.ax2.grid(True, alpha=0.3)
         
         self.canvas.draw()
     
-    def update_iv_plot(self, voltage: float, current: float):
-        """Update IV plot with new data point"""
-        self.iv_data['voltage'].append(voltage)
-        self.iv_data['current'].append(current)
+    def add_data_point(self, voltage: float, current: float, timestamp: float, sweep_number: int):
+        """Add new data point with sweep information"""
+        # Initialize sweep data if new
+        if sweep_number not in self.sweep_data:
+            self.sweep_data[sweep_number] = {
+                'voltage': [],
+                'current': [],
+                'time': []
+            }
+            self._create_sweep_checkbox(sweep_number)
+            self._create_plot_lines(sweep_number)
         
-        self.iv_line.set_data(self.iv_data['voltage'], self.iv_data['current'])
+        # Add data point
+        self.sweep_data[sweep_number]['voltage'].append(voltage)
+        self.sweep_data[sweep_number]['current'].append(current)
+        self.sweep_data[sweep_number]['time'].append(timestamp)
         
+        # Update current sweep tracking
+        self.current_sweep = sweep_number
+        
+        # Auto-follow current sweep if enabled
+        if self.auto_follow.get() and self.display_mode.get() == "current":
+            self.display_mode.set("current")
+        
+        # Refresh plots based on current display mode
+        self.refresh_plots()
+        
+        # Update sweep selection visibility
+        self._update_sweep_frame_visibility()
+    
+    def _create_sweep_checkbox(self, sweep_number: int):
+        """Create checkbox for sweep selection"""
+        var = tk.BooleanVar(value=True)  # New sweeps are selected by default
+        checkbox = ttk.Checkbutton(
+            self.sweep_frame, 
+            text=f"Sweep {sweep_number}",
+            variable=var,
+            command=self.refresh_plots
+        )
+        checkbox.pack(side="left", padx=2)
+        self.sweep_checkboxes[sweep_number] = var
+    
+    def _create_plot_lines(self, sweep_number: int):
+        """Create plot lines for a new sweep"""
+        color = self.sweep_colors[sweep_number % len(self.sweep_colors)]
+        
+        iv_line, = self.ax1.plot([], [], color=color, linewidth=1.5, 
+                                label=f'Sweep {sweep_number}', alpha=0.8)
+        time_line, = self.ax2.plot([], [], color=color, linewidth=1.5,
+                                  label=f'Sweep {sweep_number}', alpha=0.8)
+        
+        self.plot_lines[sweep_number] = {
+            'iv_line': iv_line,
+            'time_line': time_line
+        }
+    
+    def refresh_plots(self):
+        """Refresh plots based on current display mode and selections"""
+        # Clear existing line data
+        for lines in self.plot_lines.values():
+            lines['iv_line'].set_data([], [])
+            lines['time_line'].set_data([], [])
+        
+        display_mode = self.display_mode.get()
+        
+        if display_mode == "all":
+            # Show all sweeps
+            sweeps_to_show = list(self.sweep_data.keys())
+        elif display_mode == "current":
+            # Show only current sweep
+            sweeps_to_show = [self.current_sweep] if self.current_sweep is not None else []
+        elif display_mode == "select":
+            # Show selected sweeps
+            sweeps_to_show = [sweep_num for sweep_num, var in self.sweep_checkboxes.items() 
+                            if var.get()]
+        else:
+            sweeps_to_show = []
+        
+        # Update plot data for selected sweeps
+        for sweep_num in sweeps_to_show:
+            if sweep_num in self.sweep_data and sweep_num in self.plot_lines:
+                data = self.sweep_data[sweep_num]
+                lines = self.plot_lines[sweep_num]
+                
+                # Update IV plot
+                lines['iv_line'].set_data(data['voltage'], data['current'])
+                
+                # Update time plot
+                lines['time_line'].set_data(data['time'], data['current'])
+        
+        # Update legends
+        if sweeps_to_show:
+            self.ax1.legend(loc='best', fontsize=8)
+            self.ax2.legend(loc='best', fontsize=8)
+        
+        # Auto-scale axes
         self.ax1.relim()
         self.ax1.autoscale()
-        self.canvas.draw_idle()
-    
-    def update_time_plot(self, current: float, timestamp: float = None):
-        """Update time plot with new data point"""
-        if self.start_time is None:
-            self.start_time = timestamp or datetime.now().timestamp()
-        
-        elapsed_time = (timestamp or datetime.now().timestamp()) - self.start_time
-        
-        self.time_data['time'].append(elapsed_time)
-        self.time_data['current'].append(current)
-        
-        self.time_line.set_data(self.time_data['time'], self.time_data['current'])
-        
         self.ax2.relim()
         self.ax2.autoscale()
-        self.canvas.draw_idle()
+        
+        # Redraw canvas
+        self.canvas.draw()
+        
+        # Update sweep selection visibility
+        self._update_sweep_frame_visibility()
+    
+    def _update_sweep_frame_visibility(self):
+        """Show/hide sweep selection frame based on display mode"""
+        if self.display_mode.get() == "select":
+            # Show sweep selection checkboxes
+            for widget in self.sweep_frame.winfo_children():
+                widget.pack(side="left", padx=2)
+        else:
+            # Hide sweep selection checkboxes (but keep them for later)
+            for widget in self.sweep_frame.winfo_children():
+                widget.pack_forget()
+    
+    def update_iv_plot(self, voltage: float, current: float):
+        """Legacy method - kept for backward compatibility"""
+        # This method is deprecated in favor of add_data_point
+        # For now, we'll use sweep number 1 as default
+        timestamp = datetime.now().timestamp()
+        self.add_data_point(voltage, current, timestamp, 1)
+    
+    def update_time_plot(self, current: float, timestamp: float = None):
+        """Legacy method - kept for backward compatibility"""
+        # This method is deprecated in favor of add_data_point
+        # The timestamp and current will be handled by add_data_point
+        pass
+    
+    def get_sweep_info(self) -> Dict[str, Any]:
+        """Get information about current sweeps"""
+        return {
+            'available_sweeps': list(self.sweep_data.keys()),
+            'current_sweep': self.current_sweep,
+            'display_mode': self.display_mode.get(),
+            'selected_sweeps': [sweep_num for sweep_num, var in self.sweep_checkboxes.items() 
+                              if var.get()],
+            'total_points': sum(len(data['voltage']) for data in self.sweep_data.values())
+        }
 
 
 class ControlFrame(ttk.Frame):
@@ -873,6 +1036,14 @@ class ControlFrame(ttk.Frame):
         
         ttk.Label(status_frame, textvariable=self.status_var).pack()
         
+        # Sweep information display
+        self.sweep_info_var = tk.StringVar(value="No sweeps")
+        sweep_info_frame = ttk.LabelFrame(self, text="Sweep Information", padding="5")
+        sweep_info_frame.pack(fill="x", pady=5)
+        
+        ttk.Label(sweep_info_frame, textvariable=self.sweep_info_var, 
+                 font=("TkDefaultFont", 8)).pack()
+        
         # Callbacks
         self.start_callback: Optional[Callable] = None
         self.pause_callback: Optional[Callable] = None
@@ -911,6 +1082,24 @@ class ControlFrame(ttk.Frame):
             return False, f"'{filename}' is a reserved filename"
         
         return True, ""
+    
+    def update_sweep_info(self, sweep_info: Dict[str, Any]):
+        """Update sweep information display"""
+        if not sweep_info['available_sweeps']:
+            self.sweep_info_var.set("No sweeps")
+        else:
+            current = sweep_info['current_sweep']
+            total_sweeps = len(sweep_info['available_sweeps'])
+            total_points = sweep_info['total_points']
+            mode = sweep_info['display_mode']
+            
+            info_text = f"Current: Sweep {current} | Total: {total_sweeps} sweeps, {total_points} points | Mode: {mode.title()}"
+            
+            if mode == "select":
+                selected = len(sweep_info['selected_sweeps'])
+                info_text += f" ({selected} selected)"
+            
+            self.sweep_info_var.set(info_text)
     
     def on_start(self):
         """Handle start button click"""
@@ -1115,6 +1304,9 @@ class MainApplication:
         advanced_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Advanced", menu=advanced_menu)
         advanced_menu.add_command(label="Command Console", command=self.show_command_console)
+        advanced_menu.add_separator()
+        advanced_menu.add_command(label="Export Sweep Comparison", command=self.export_sweep_comparison)
+        advanced_menu.add_command(label="Force File Sync", command=self.force_file_sync)
         advanced_menu.add_separator()
         advanced_menu.add_command(label="Recover from Cache", command=self.show_cache_recovery)
         
@@ -1431,13 +1623,14 @@ class MainApplication:
             while not self.data_queue.empty():
                 data_point = self.data_queue.get_nowait()
                 
-                # Update plots
+                # Extract data with sweep information
                 voltage = data_point.get('voltage', 0)
                 current = data_point.get('current', 0)
-                timestamp = data_point.get('timestamp', None)
+                timestamp = data_point.get('timestamp', 0)
+                sweep_number = data_point.get('sweep_number', 1)
                 
-                self.plot_frame.update_iv_plot(voltage, current)
-                self.plot_frame.update_time_plot(current, timestamp)
+                # Update plots with sweep-aware method
+                self.plot_frame.add_data_point(voltage, current, timestamp, sweep_number)
                 
         except queue.Empty:
             pass
@@ -1460,6 +1653,11 @@ class MainApplication:
                     current_state = self.control_frame.status_var.get()
                     if current_state in ["Measuring...", "Stopping..."]:
                         self.control_frame.set_measuring_state("ready")
+            
+            # Update sweep information display
+            sweep_info = self.plot_frame.get_sweep_info()
+            self.control_frame.update_sweep_info(sweep_info)
+            
         except Exception as e:
             logger.error(f"Error in periodic status update: {e}")
         
@@ -1576,6 +1774,79 @@ class MainApplication:
         
         ttk.Button(button_frame, text="Recover Selected", command=recover_selected).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
+    
+    def export_sweep_comparison(self):
+        """Export sweep comparison data to CSV"""
+        sweep_info = self.plot_frame.get_sweep_info()
+        
+        if not sweep_info['available_sweeps']:
+            messagebox.showinfo("Info", "No sweep data available to export")
+            return
+        
+        # Get selected sweeps based on current display mode
+        if sweep_info['display_mode'] == "all":
+            sweeps_to_export = sweep_info['available_sweeps']
+        elif sweep_info['display_mode'] == "current":
+            sweeps_to_export = [sweep_info['current_sweep']] if sweep_info['current_sweep'] else []
+        elif sweep_info['display_mode'] == "select":
+            sweeps_to_export = sweep_info['selected_sweeps']
+        else:
+            sweeps_to_export = []
+        
+        if not sweeps_to_export:
+            messagebox.showwarning("Warning", "No sweeps selected for export")
+            return
+        
+        # Ask for filename
+        filename = filedialog.asksaveasfilename(
+            title="Export Sweep Comparison",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        
+        if not filename:
+            return
+        
+        try:
+            # Get sweep data from plot frame
+            sweep_data = self.plot_frame.sweep_data
+            
+            # Create comparison DataFrame
+            comparison_data = []
+            
+            for sweep_num in sorted(sweeps_to_export):
+                if sweep_num in sweep_data:
+                    data = sweep_data[sweep_num]
+                    for i in range(len(data['voltage'])):
+                        comparison_data.append({
+                            'sweep_number': sweep_num,
+                            'voltage': data['voltage'][i],
+                            'current': data['current'][i],
+                            'time': data['time'][i],
+                            'resistance': data['voltage'][i] / data['current'][i] if data['current'][i] != 0 else float('inf')
+                        })
+            
+            # Save to CSV
+            df = pd.DataFrame(comparison_data)
+            df.to_csv(filename, index=False)
+            
+            messagebox.showinfo("Success", f"Sweep comparison exported successfully!\n\nFile: {filename}\nSweeps: {sweeps_to_export}\nTotal points: {len(comparison_data)}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export sweep comparison:\n{e}")
+    
+    def force_file_sync(self):
+        """Force file synchronization for debugging"""
+        if not self.engine:
+            messagebox.showwarning("Warning", "No data engine available")
+            return
+        
+        try:
+            self.engine.force_file_sync()
+            self.engine._log_file_status()
+            messagebox.showinfo("File Sync", "File synchronization forced.\nCheck console logs for detailed file status.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to force file sync:\n{e}")
     
     def show_about(self):
         """Show about dialog"""

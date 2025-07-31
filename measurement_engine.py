@@ -175,10 +175,45 @@ class DataAcquisitionEngine:
             logger.error(f"Cache recovery failed: {e}")
             return False
     
+    def _log_file_status(self):
+        """Log status of main data files and cache files for debugging"""
+        try:
+            # Check main data directory
+            main_files = list(self.save_directory.glob("*.csv"))
+            logger.info(f"Main data directory has {len(main_files)} CSV files")
+            
+            for file_path in main_files[-3:]:  # Show last 3 files
+                if file_path.exists():
+                    size = file_path.stat().st_size
+                    logger.info(f"  {file_path.name}: {size} bytes")
+                    
+                    # Check if file has content beyond header
+                    try:
+                        with open(file_path, 'r') as f:
+                            lines = f.readlines()
+                            logger.info(f"    Lines: {len(lines)} (header + {len(lines)-1} data lines)")
+                    except Exception as e:
+                        logger.warning(f"    Could not read file content: {e}")
+            
+            # Check cache directory
+            cache_files = list(self.cache_directory.glob("cache_*.csv"))
+            logger.info(f"Cache directory has {len(cache_files)} cache files")
+            
+            for file_path in cache_files[-2:]:  # Show last 2 cache files
+                if file_path.exists():
+                    size = file_path.stat().st_size
+                    logger.info(f"  {file_path.name}: {size} bytes")
+                    
+        except Exception as e:
+            logger.error(f"Error logging file status: {e}")
+    
     def _save_worker(self):
         """Worker thread for saving data to file"""
         current_file = None
         file_handle = None
+        data_lines_written = 0
+        
+        logger.info("Save worker thread started")
         
         try:
             while not self.should_stop or not self.save_queue.empty():
@@ -186,12 +221,15 @@ class DataAcquisitionEngine:
                     item = self.save_queue.get(timeout=1.0)
                     
                     if item is None:  # Shutdown signal
+                        logger.info(f"Save worker received shutdown signal. Lines written: {data_lines_written}")
                         break
                     
                     if isinstance(item, dict) and 'filename' in item:
                         # New file command
                         if file_handle:
+                            logger.info(f"Closing previous file. Lines written: {data_lines_written}")
                             file_handle.close()
+                            data_lines_written = 0
                         
                         current_file = self.save_directory / item['filename']
                         file_handle = open(current_file, 'w', newline='')
@@ -199,8 +237,12 @@ class DataAcquisitionEngine:
                         # Write header
                         if 'header' in item:
                             file_handle.write(item['header'] + '\n')
+                            file_handle.flush()  # Ensure header is written immediately
+                            import os
+                            os.fsync(file_handle.fileno())  # Force OS to write header to disk
                             # Also write header to cache
                             self._write_to_cache(item['header'])
+                            logger.info(f"Header written to main file: {current_file}")
                         
                         logger.info(f"Started saving to {current_file}")
                     
@@ -208,16 +250,38 @@ class DataAcquisitionEngine:
                         # Data line - write to both main file and cache
                         file_handle.write(item + '\n')
                         file_handle.flush()  # Ensure data is written immediately
+                        import os
+                        os.fsync(file_handle.fileno())  # Force OS to write to disk
                         self._write_to_cache(item)  # Also write to cache
+                        data_lines_written += 1
+                        
+                        # Log progress every 10 lines
+                        if data_lines_written % 10 == 0:
+                            logger.debug(f"Written {data_lines_written} data lines to {current_file}")
+                    
+                    elif isinstance(item, str) and item == "__SYNC_MARKER__":
+                        # Sync marker - force file operations to complete
+                        if file_handle:
+                            file_handle.flush()
+                            import os
+                            os.fsync(file_handle.fileno())
+                            logger.info(f"File sync completed. Lines written so far: {data_lines_written}")
+                    
+                    elif isinstance(item, str) and not file_handle:
+                        logger.warning(f"Received data line but no file handle open: {item[:50]}...")
                 
                 except queue.Empty:
                     continue
                 except Exception as e:
                     logger.error(f"Save worker error: {e}")
+                    import traceback
+                    logger.error(f"Save worker traceback: {traceback.format_exc()}")
         
         finally:
             if file_handle:
+                logger.info(f"Save worker closing file. Total lines written: {data_lines_written}")
                 file_handle.close()
+            logger.info("Save worker thread terminated")
     
     def start_iv_sweep(self, sweep_params: SweepParameters, 
                       measurement_settings: MeasurementSettings,
@@ -326,6 +390,10 @@ class DataAcquisitionEngine:
                         data_line = f"{relative_timestamp:.3f},{source_val},{measured_val},{resistance},{segment_idx},{total_points},{sweep_number}"
                         self.save_queue.put(data_line)
                         
+                        # Force file sync every 50 points for safety
+                        if total_points % 50 == 0:
+                            self.save_queue.put("__SYNC_MARKER__")
+                        
                         # Notify callbacks
                         self._notify_data_callbacks(data_point)
                         
@@ -382,6 +450,10 @@ class DataAcquisitionEngine:
                             
                             data_line = f"{relative_timestamp:.3f},{source_val},{measured_val},{resistance},{len(sweep_params.segments) + segment_idx},{total_points},{sweep_number}"
                             self.save_queue.put(data_line)
+                            
+                            # Force file sync every 50 points for safety
+                            if total_points % 50 == 0:
+                                self.save_queue.put("__SYNC_MARKER__")
                             
                             self._notify_data_callbacks(data_point)
                             
@@ -525,19 +597,38 @@ class DataAcquisitionEngine:
         
         # Wait for measurement thread to finish
         if self.measurement_thread and self.measurement_thread.is_alive():
+            logger.info("Waiting for measurement thread to finish...")
             self.measurement_thread.join(timeout=5.0)
+            if self.measurement_thread.is_alive():
+                logger.warning("Measurement thread did not finish within timeout")
         
-        # Stop save thread
+        # Stop save thread - give it more time to finish writing
+        logger.info("Stopping save worker thread...")
         self.save_queue.put(None)  # Shutdown signal
         if self.save_thread and self.save_thread.is_alive():
-            self.save_thread.join(timeout=2.0)
+            self.save_thread.join(timeout=10.0)  # Increased timeout for file operations
+            if self.save_thread.is_alive():
+                logger.warning("Save thread did not finish within timeout")
+        
+        # Close cache
+        self._close_cache()
         
         self.is_measuring = False
         logger.info("Measurement stopped")
+        
+        # Log file status for debugging
+        self._log_file_status()
     
     def is_measurement_active(self) -> bool:
         """Check if measurement is currently active"""
         return self.is_measuring
+    
+    def force_file_sync(self):
+        """Force synchronization of save queue - useful for debugging"""
+        if self.save_thread and self.save_thread.is_alive():
+            # Add a special sync marker to the queue
+            self.save_queue.put("__SYNC_MARKER__")
+            logger.info("File sync marker added to save queue")
     
     def get_measurement_status(self) -> Dict[str, Any]:
         """Get current measurement status"""
