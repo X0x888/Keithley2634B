@@ -109,7 +109,7 @@ class InstrumentFrame(ParameterFrame):
     def __init__(self, parent):
         super().__init__(parent, "Instrument Settings")
         
-        self.add_parameter("resource_name", "VISA Resource:", "TCPIP::192.168.1.100::INSTR")
+        self.add_parameter("resource_name", "VISA Resource:", "GPIB0::26::INSTR")
         self.add_parameter("channel", "Channel:", "a", "combobox", ["a", "b"])
         
         # Connection status

@@ -84,27 +84,115 @@ class Keithley2634B:
             bool: True if connection successful
         """
         try:
-            self.instrument = self.rm.open_resource(self.resource_name)
-            self.instrument.timeout = 10000  # 10 second timeout
+            logger.info(f"Attempting to connect to: {self.resource_name}")
             
-            # Test connection
-            idn = self.query("*IDN?")
-            logger.info(f"Connected to: {idn}")
+            # First, check if resource manager can list resources
+            try:
+                available_resources = self.rm.list_resources()
+                logger.info(f"Available VISA resources: {available_resources}")
+                
+                if self.resource_name not in available_resources:
+                    logger.warning(f"Resource {self.resource_name} not found in available resources")
+                    logger.warning("Please check:")
+                    logger.warning("1. Instrument is powered on")
+                    logger.warning("2. GPIB cable is connected")
+                    logger.warning("3. GPIB address matches (currently set to 26)")
+                    logger.warning("4. NI-VISA and GPIB drivers are installed")
+            except Exception as rm_error:
+                logger.error(f"Cannot list VISA resources: {rm_error}")
+                logger.error("This usually indicates VISA runtime is not properly installed")
+            
+            # Attempt to open the resource
+            logger.info("Opening VISA resource...")
+            self.instrument = self.rm.open_resource(self.resource_name)
+            
+            # Configure timeouts and termination for Keithley 2634B
+            self.instrument.timeout = 15000  # 15 second timeout (Keithley can be slow)
+            
+            # For GPIB instruments, set appropriate termination
+            if "GPIB" in self.resource_name.upper():
+                # Keithley 2634B uses LF as termination character
+                self.instrument.read_termination = '\n'
+                self.instrument.write_termination = '\n'
+                
+                # Set GPIB specific settings
+                try:
+                    # Enable service request and set appropriate GPIB settings
+                    self.instrument.clear()  # Clear any pending data
+                except:
+                    pass  # Some GPIB interfaces don't support clear
+            
+            logger.info("VISA resource opened successfully")
+            
+            # Test basic communication first
+            logger.info("Testing basic communication...")
+            self.is_connected = True  # Set this temporarily for query to work
+            
+            try:
+                idn = self.query("*IDN?")
+                logger.info(f"Instrument identification: {idn}")
+                
+                # Verify this is a Keithley 2634B
+                if "2634B" not in idn:
+                    logger.warning(f"Connected instrument may not be a 2634B: {idn}")
+                
+            except Exception as idn_error:
+                logger.error(f"Failed to get instrument ID: {idn_error}")
+                self.is_connected = False
+                if self.instrument:
+                    self.instrument.close()
+                return False
             
             # Reset and configure instrument
+            logger.info("Configuring instrument...")
             self.write("*RST")
             self.write("*CLS")
-            time.sleep(0.1)
+            time.sleep(0.5)  # Give more time for reset
             
-            # Set to remote mode
-            self.write("localnode.prompts = 0")  # Disable prompts
+            # Set to remote mode and disable prompts
+            self.write("localnode.prompts = 0")
             
-            self.is_connected = True
+            # Test TSP communication and verify the channel exists
+            try:
+                # First test basic TSP command
+                self.write("print('TSP Ready')")
+                response = self.instrument.read()
+                logger.info(f"TSP communication test: {response.strip()}")
+                
+                # Then verify the channel exists
+                channel_test = self.query(f"print({self.smu_name}.source.output)")
+                logger.info(f"Channel {self.channel} verified, output state: {channel_test}")
+            except Exception as ch_error:
+                logger.error(f"Channel {self.channel} verification failed: {ch_error}")
+                logger.error(f"Make sure channel '{self.channel}' exists on this instrument")
+                # Don't fail the connection for this - the channel might just be off
+            
+            logger.info("Connection successful!")
             return True
             
         except Exception as e:
             logger.error(f"Connection failed: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            
+            # Provide specific troubleshooting based on error type
+            if "VisaIOError" in str(type(e)):
+                logger.error("VISA I/O Error - Check:")
+                logger.error("1. Instrument is powered on and ready")
+                logger.error("2. GPIB cable connections")
+                logger.error("3. GPIB address settings")
+                logger.error("4. No other software is using the instrument")
+            elif "timeout" in str(e).lower():
+                logger.error("Communication timeout - Check:")
+                logger.error("1. GPIB termination settings")
+                logger.error("2. Instrument is not busy")
+                logger.error("3. GPIB cable integrity")
+            
             self.is_connected = False
+            if hasattr(self, 'instrument') and self.instrument:
+                try:
+                    self.instrument.close()
+                except:
+                    pass
             return False
     
     def disconnect(self):
