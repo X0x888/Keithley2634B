@@ -249,11 +249,11 @@ class Keithley2634B:
             else:
                 self.write(f"{self.smu_name}.source.func = 0")  # OUTPUT_DCAMPS = 0
             
-            # Configure sense function (correct TSP syntax with numeric constants)
+            # Configure measure function (what to measure - current vs voltage)
             if settings.sense_function == SenseFunction.CURRENT:
-                self.write(f"{self.smu_name}.sense = 1")  # SENSE_DCAMPS = 1
+                self.write(f"{self.smu_name}.measure.func = 1")  # MEASURE_DCAMPS = 1
             else:
-                self.write(f"{self.smu_name}.sense = 0")  # SENSE_DCVOLTS = 0
+                self.write(f"{self.smu_name}.measure.func = 0")  # MEASURE_DCVOLTS = 0
             
             # Configure source ranges and autorange
             if settings.source_function == SourceFunction.VOLTAGE:
@@ -480,9 +480,9 @@ class Keithley2634B:
             else:
                 source_function = SourceFunction.CURRENT
             
-            # Read sense function  
-            sense_func = self.query(f"print({self.smu_name}.sense)")
-            if "1" in sense_func:  # SENSE_DCAMPS = 1
+            # Read measure function (what is being measured)
+            measure_func = self.query(f"print({self.smu_name}.measure.func)")
+            if "1" in measure_func:  # MEASURE_DCAMPS = 1
                 sense_function = SenseFunction.CURRENT
             else:
                 sense_function = SenseFunction.VOLTAGE
