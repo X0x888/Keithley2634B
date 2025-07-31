@@ -423,6 +423,76 @@ class Keithley2634B:
         except Exception as e:
             logger.error(f"Status query error: {e}")
             return {"connected": False, "error": str(e)}
+    
+    def read_current_settings(self) -> MeasurementSettings:
+        """
+        Read current measurement settings from the instrument
+        
+        Returns:
+            MeasurementSettings object with current instrument settings
+        """
+        if not self.is_connected:
+            raise RuntimeError("Instrument not connected")
+        
+        try:
+            logger.info("Reading current settings from instrument...")
+            
+            # Read source function
+            source_func = self.query(f"print({self.smu_name}.source.func)")
+            if "1" in source_func:  # OUTPUT_DCVOLTS = 1
+                source_function = SourceFunction.VOLTAGE
+            else:
+                source_function = SourceFunction.CURRENT
+            
+            # Read sense function  
+            sense_func = self.query(f"print({self.smu_name}.sense)")
+            if "1" in sense_func:  # SENSE_DCAMPS = 1
+                sense_function = SenseFunction.CURRENT
+            else:
+                sense_function = SenseFunction.VOLTAGE
+            
+            # Read ranges and autorange settings
+            if source_function == SourceFunction.VOLTAGE:
+                source_autorange = self.query(f"print({self.smu_name}.source.autorangev)")
+                source_range = float(self.query(f"print({self.smu_name}.source.rangev)"))
+                compliance = float(self.query(f"print({self.smu_name}.source.limiti)"))
+            else:
+                source_autorange = self.query(f"print({self.smu_name}.source.autorangei)")
+                source_range = float(self.query(f"print({self.smu_name}.source.rangei)"))
+                compliance = float(self.query(f"print({self.smu_name}.source.limitv)"))
+            
+            if sense_function == SenseFunction.CURRENT:
+                sense_autorange = self.query(f"print({self.smu_name}.measure.autorangei)")
+                sense_range = float(self.query(f"print({self.smu_name}.measure.rangei)"))
+            else:
+                sense_autorange = self.query(f"print({self.smu_name}.measure.autorangev)")
+                sense_range = float(self.query(f"print({self.smu_name}.measure.rangev)"))
+            
+            # Read other settings
+            nplc = float(self.query(f"print({self.smu_name}.measure.nplc)"))
+            filter_enable = self.query(f"print({self.smu_name}.measure.filter.enable)")
+            filter_count = int(float(self.query(f"print({self.smu_name}.measure.filter.count)")))
+            
+            # Create settings object
+            settings = MeasurementSettings(
+                source_function=source_function,
+                sense_function=sense_function,
+                source_range=source_range,
+                sense_range=sense_range,
+                source_autorange="1" in source_autorange,
+                sense_autorange="1" in sense_autorange,
+                compliance=compliance,
+                nplc=nplc,
+                filter_enable="1" in filter_enable,
+                filter_count=filter_count
+            )
+            
+            logger.info("Successfully read settings from instrument")
+            return settings
+            
+        except Exception as e:
+            logger.error(f"Failed to read settings: {e}")
+            raise
 
 
 # Example usage and testing

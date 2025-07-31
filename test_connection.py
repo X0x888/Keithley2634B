@@ -67,6 +67,15 @@ def test_connection():
             output_state = keithley.query(f"print({keithley.smu_name}.source.output)")
             print(f"✓ Output state: {output_state}")
             
+            # Test settings reading
+            print("Testing settings reading...")
+            current_settings = keithley.read_current_settings()
+            print(f"✓ Current settings read successfully:")
+            print(f"  Source: {current_settings.source_function.value}")
+            print(f"  Sense: {current_settings.sense_function.value}")
+            print(f"  Compliance: {current_settings.compliance}")
+            print(f"  NPLC: {current_settings.nplc}")
+            
             print("✓ All basic operations working")
             
         except Exception as e:

@@ -212,48 +212,74 @@ class MeasurementSettingsFrame(ParameterFrame):
         self.add_parameter("filter_enable", "Enable Filter:", False, "checkbutton")
         self.add_parameter("filter_count", "Filter Count:", "10")
         
-        # Apply settings button
-        apply_frame = ttk.Frame(self)
-        apply_frame.grid(row=len(self.variables), column=0, columnspan=2, pady=10)
+        # Settings control buttons
+        button_frame = ttk.Frame(self)
+        button_frame.grid(row=len(self.variables), column=0, columnspan=2, pady=10)
         
-        self.apply_btn = ttk.Button(apply_frame, text="Apply Settings to Instrument", 
-                                   command=self.on_apply_settings, state="disabled")
-        self.apply_btn.pack()
+        # Pull settings button
+        self.pull_btn = ttk.Button(button_frame, text="Pull from Instrument", 
+                                  command=self.on_pull_settings, state="disabled", width=20)
+        self.pull_btn.pack(pady=2)
+        
+        # Apply settings button
+        self.apply_btn = ttk.Button(button_frame, text="Apply to Instrument", 
+                                   command=self.on_apply_settings, state="disabled", width=20)
+        self.apply_btn.pack(pady=2)
         
         # Settings status
         self.settings_status_var = tk.StringVar(value="Not Applied")
-        status_label = ttk.Label(apply_frame, textvariable=self.settings_status_var, 
-                                foreground="orange", font=("TkDefaultFont", 8))
-        status_label.pack(pady=2)
+        self.status_label = ttk.Label(button_frame, textvariable=self.settings_status_var, 
+                                     foreground="orange", font=("TkDefaultFont", 8))
+        self.status_label.pack(pady=2)
         
-        # Callback
+        # Pull status (separate from apply status)
+        self.pull_status_var = tk.StringVar(value="")
+        self.pull_status_label = ttk.Label(button_frame, textvariable=self.pull_status_var, 
+                                          font=("TkDefaultFont", 8))
+        self.pull_status_label.pack(pady=1)
+        
+        # Callbacks
         self.apply_callback: Optional[Callable] = None
+        self.pull_callback: Optional[Callable] = None
     
     def on_apply_settings(self):
         """Handle apply settings button click"""
         if self.apply_callback:
             self.apply_callback()
     
+    def on_pull_settings(self):
+        """Handle pull settings button click"""
+        if self.pull_callback:
+            self.pull_callback()
+    
     def set_instrument_connected(self, connected: bool):
-        """Enable/disable apply button based on connection status"""
+        """Enable/disable buttons based on connection status"""
         if connected:
             self.apply_btn.config(state="normal")
+            self.pull_btn.config(state="normal")
         else:
             self.apply_btn.config(state="disabled")
+            self.pull_btn.config(state="disabled")
             self.settings_status_var.set("Not Applied")
+            self.pull_status_var.set("")
     
     def set_settings_applied(self, applied: bool, message: str = ""):
-        """Update settings status"""
+        """Update apply settings status"""
         if applied:
             self.settings_status_var.set("Applied ✓")
-            status_label = [child for child in self.winfo_children() 
-                           if isinstance(child, ttk.Frame)][0].winfo_children()[1]
-            status_label.config(foreground="green")
+            self.status_label.config(foreground="green")
         else:
             self.settings_status_var.set(message or "Not Applied")
-            status_label = [child for child in self.winfo_children() 
-                           if isinstance(child, ttk.Frame)][0].winfo_children()[1]
-            status_label.config(foreground="orange")
+            self.status_label.config(foreground="orange")
+    
+    def set_pull_status(self, success: bool, message: str = ""):
+        """Update pull settings status"""
+        if success:
+            self.pull_status_var.set("Pulled ✓")
+            self.pull_status_label.config(foreground="green")
+        else:
+            self.pull_status_var.set(f"Pull failed: {message}")
+            self.pull_status_label.config(foreground="red")
 
 
 class SweepParametersFrame(ParameterFrame):
@@ -573,9 +599,38 @@ class MainApplication:
         main_paned = ttk.PanedWindow(self.root, orient="horizontal")
         main_paned.pack(fill="both", expand=True, padx=5, pady=5)
         
-        # Left panel for controls
-        left_frame = ttk.Frame(main_paned)
-        main_paned.add(left_frame, weight=1)
+        # Left panel for controls (scrollable)
+        left_container = ttk.Frame(main_paned)
+        left_canvas = tk.Canvas(left_container, width=400)
+        left_scrollbar = ttk.Scrollbar(left_container, orient="vertical", command=left_canvas.yview)
+        left_scrollable_frame = ttk.Frame(left_canvas)
+        
+        # Configure scrolling
+        left_scrollable_frame.bind(
+            "<Configure>",
+            lambda e: left_canvas.configure(scrollregion=left_canvas.bbox("all"))
+        )
+        
+        left_canvas.create_window((0, 0), window=left_scrollable_frame, anchor="nw")
+        left_canvas.configure(yscrollcommand=left_scrollbar.set)
+        
+        # Pack canvas and scrollbar
+        left_canvas.pack(side="left", fill="both", expand=True)
+        left_scrollbar.pack(side="right", fill="y")
+        
+        # Add container to paned window
+        main_paned.add(left_container, weight=1)
+        
+        # Use scrollable frame as the left frame
+        left_frame = left_scrollable_frame
+        
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        left_canvas.bind("<MouseWheel>", _on_mousewheel)  # Windows
+        left_canvas.bind("<Button-4>", lambda e: left_canvas.yview_scroll(-1, "units"))  # Linux
+        left_canvas.bind("<Button-5>", lambda e: left_canvas.yview_scroll(1, "units"))   # Linux
         
         # Right panel for plots
         right_frame = ttk.Frame(main_paned)
@@ -642,6 +697,7 @@ class MainApplication:
         
         # Measurement settings callbacks
         self.measurement_settings_frame.apply_callback = self.apply_measurement_settings
+        self.measurement_settings_frame.pull_callback = self.pull_measurement_settings
         
         # Control callbacks
         self.control_frame.start_callback = self.start_measurement
@@ -768,6 +824,59 @@ class MainApplication:
         except Exception as e:
             self.measurement_settings_frame.set_settings_applied(False, f"Error: {str(e)[:30]}...")
             messagebox.showerror("Error", f"Failed to apply settings: {e}")
+    
+    def pull_measurement_settings(self):
+        """Pull current measurement settings from the instrument"""
+        if not self.keithley:
+            messagebox.showerror("Error", "No instrument connected")
+            return
+        
+        try:
+            logger.info("Pulling settings from instrument...")
+            
+            # Read current settings from instrument
+            current_settings = self.keithley.read_current_settings()
+            
+            # Update GUI fields with instrument settings
+            settings_dict = {
+                "source_function": current_settings.source_function.value,
+                "sense_function": current_settings.sense_function.value,
+                "source_range": str(current_settings.source_range),
+                "sense_range": str(current_settings.sense_range),
+                "source_autorange": current_settings.source_autorange,
+                "sense_autorange": current_settings.sense_autorange,
+                "compliance": str(current_settings.compliance),
+                "nplc": str(current_settings.nplc),
+                "filter_enable": current_settings.filter_enable,
+                "filter_count": str(current_settings.filter_count)
+            }
+            
+            # Set values in GUI
+            self.measurement_settings_frame.set_values(settings_dict)
+            
+            # Update status
+            self.measurement_settings_frame.set_pull_status(True)
+            self.measurement_settings_frame.set_settings_applied(False, "Settings pulled - not yet applied")
+            
+            messagebox.showinfo("Success", "Settings pulled from instrument successfully!\n\n"
+                              "Review the settings and click 'Apply to Instrument' if you want to make changes.")
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Failed to pull settings: {error_msg}")
+            
+            # Provide specific error feedback
+            if "timeout" in error_msg.lower():
+                reason = "Communication timeout - instrument may be busy"
+            elif "not connected" in error_msg.lower():
+                reason = "Instrument not properly connected"
+            elif "query" in error_msg.lower():
+                reason = "Invalid command or instrument response"
+            else:
+                reason = f"Unknown error: {error_msg[:50]}..."
+            
+            self.measurement_settings_frame.set_pull_status(False, reason)
+            messagebox.showerror("Error", f"Failed to pull settings from instrument:\n\n{reason}")
     
     def pause_measurement(self):
         """Pause current measurement"""
