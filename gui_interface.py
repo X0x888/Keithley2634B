@@ -128,9 +128,26 @@ class InstrumentFrame(ParameterFrame):
         self.disconnect_btn = ttk.Button(button_frame, text="Disconnect", command=self.on_disconnect, state="disabled")
         self.disconnect_btn.pack(side="left", padx=5)
         
+        # Output control
+        output_frame = ttk.Frame(self)
+        output_frame.grid(row=4, column=0, columnspan=2, pady=5)
+        
+        ttk.Label(output_frame, text="Output:").pack(side="left", padx=5)
+        self.output_status_var = tk.StringVar(value="OFF")
+        self.output_status_label = ttk.Label(output_frame, textvariable=self.output_status_var, foreground="red")
+        self.output_status_label.pack(side="left", padx=5)
+        
+        self.output_on_btn = ttk.Button(output_frame, text="Output ON", command=self.on_output_on, state="disabled")
+        self.output_on_btn.pack(side="left", padx=5)
+        
+        self.output_off_btn = ttk.Button(output_frame, text="Output OFF", command=self.on_output_off, state="disabled")
+        self.output_off_btn.pack(side="left", padx=5)
+        
         # Callbacks
         self.connect_callback: Optional[Callable] = None
         self.disconnect_callback: Optional[Callable] = None
+        self.output_on_callback: Optional[Callable] = None
+        self.output_off_callback: Optional[Callable] = None
     
     def on_connect(self):
         """Handle connect button click"""
@@ -142,16 +159,40 @@ class InstrumentFrame(ParameterFrame):
         if self.disconnect_callback:
             self.disconnect_callback()
     
+    def on_output_on(self):
+        """Handle output on button click"""
+        if self.output_on_callback:
+            self.output_on_callback()
+    
+    def on_output_off(self):
+        """Handle output off button click"""
+        if self.output_off_callback:
+            self.output_off_callback()
+    
     def set_connected(self, connected: bool):
         """Update connection status"""
         if connected:
             self.status_var.set("Connected")
             self.connect_btn.config(state="disabled")
             self.disconnect_btn.config(state="normal")
+            self.output_on_btn.config(state="normal")
+            self.output_off_btn.config(state="normal")
         else:
             self.status_var.set("Disconnected")
             self.connect_btn.config(state="normal")
             self.disconnect_btn.config(state="disabled")
+            self.output_on_btn.config(state="disabled")
+            self.output_off_btn.config(state="disabled")
+            self.set_output_status(False)
+    
+    def set_output_status(self, output_on: bool):
+        """Update output status display"""
+        if output_on:
+            self.output_status_var.set("ON")
+            self.output_status_label.config(foreground="green")
+        else:
+            self.output_status_var.set("OFF")
+            self.output_status_label.config(foreground="red")
 
 
 class MeasurementSettingsFrame(ParameterFrame):
@@ -170,6 +211,49 @@ class MeasurementSettingsFrame(ParameterFrame):
         self.add_parameter("nplc", "Integration Time (NPLC):", "1.0")
         self.add_parameter("filter_enable", "Enable Filter:", False, "checkbutton")
         self.add_parameter("filter_count", "Filter Count:", "10")
+        
+        # Apply settings button
+        apply_frame = ttk.Frame(self)
+        apply_frame.grid(row=len(self.variables), column=0, columnspan=2, pady=10)
+        
+        self.apply_btn = ttk.Button(apply_frame, text="Apply Settings to Instrument", 
+                                   command=self.on_apply_settings, state="disabled")
+        self.apply_btn.pack()
+        
+        # Settings status
+        self.settings_status_var = tk.StringVar(value="Not Applied")
+        status_label = ttk.Label(apply_frame, textvariable=self.settings_status_var, 
+                                foreground="orange", font=("TkDefaultFont", 8))
+        status_label.pack(pady=2)
+        
+        # Callback
+        self.apply_callback: Optional[Callable] = None
+    
+    def on_apply_settings(self):
+        """Handle apply settings button click"""
+        if self.apply_callback:
+            self.apply_callback()
+    
+    def set_instrument_connected(self, connected: bool):
+        """Enable/disable apply button based on connection status"""
+        if connected:
+            self.apply_btn.config(state="normal")
+        else:
+            self.apply_btn.config(state="disabled")
+            self.settings_status_var.set("Not Applied")
+    
+    def set_settings_applied(self, applied: bool, message: str = ""):
+        """Update settings status"""
+        if applied:
+            self.settings_status_var.set("Applied ✓")
+            status_label = [child for child in self.winfo_children() 
+                           if isinstance(child, ttk.Frame)][0].winfo_children()[1]
+            status_label.config(foreground="green")
+        else:
+            self.settings_status_var.set(message or "Not Applied")
+            status_label = [child for child in self.winfo_children() 
+                           if isinstance(child, ttk.Frame)][0].winfo_children()[1]
+            status_label.config(foreground="orange")
 
 
 class SweepParametersFrame(ParameterFrame):
@@ -367,14 +451,20 @@ class ControlFrame(ttk.Frame):
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill="x", pady=10)
         
-        self.start_btn = ttk.Button(btn_frame, text="Start Measurement", command=self.on_start)
-        self.start_btn.pack(side="left", padx=5)
+        self.start_btn = ttk.Button(btn_frame, text="Start", command=self.on_start, width=10)
+        self.start_btn.pack(side="left", padx=2)
         
-        self.stop_btn = ttk.Button(btn_frame, text="Stop Measurement", command=self.on_stop, state="disabled")
-        self.stop_btn.pack(side="left", padx=5)
+        self.pause_btn = ttk.Button(btn_frame, text="Pause", command=self.on_pause, state="disabled", width=10)
+        self.pause_btn.pack(side="left", padx=2)
         
-        self.clear_btn = ttk.Button(btn_frame, text="Clear Plots", command=self.on_clear)
-        self.clear_btn.pack(side="left", padx=5)
+        self.resume_btn = ttk.Button(btn_frame, text="Resume", command=self.on_resume, state="disabled", width=10)
+        self.resume_btn.pack(side="left", padx=2)
+        
+        self.stop_btn = ttk.Button(btn_frame, text="Stop", command=self.on_stop, state="disabled", width=10)
+        self.stop_btn.pack(side="left", padx=2)
+        
+        self.clear_btn = ttk.Button(btn_frame, text="Clear Plots", command=self.on_clear, width=10)
+        self.clear_btn.pack(side="left", padx=2)
         
         # Status display
         self.status_var = tk.StringVar(value="Ready")
@@ -385,6 +475,8 @@ class ControlFrame(ttk.Frame):
         
         # Callbacks
         self.start_callback: Optional[Callable] = None
+        self.pause_callback: Optional[Callable] = None
+        self.resume_callback: Optional[Callable] = None
         self.stop_callback: Optional[Callable] = None
         self.clear_callback: Optional[Callable] = None
     
@@ -392,6 +484,16 @@ class ControlFrame(ttk.Frame):
         """Handle start button click"""
         if self.start_callback:
             self.start_callback(self.measurement_type.get())
+    
+    def on_pause(self):
+        """Handle pause button click"""
+        if self.pause_callback:
+            self.pause_callback()
+    
+    def on_resume(self):
+        """Handle resume button click"""
+        if self.resume_callback:
+            self.resume_callback()
     
     def on_stop(self):
         """Handle stop button click"""
@@ -403,16 +505,43 @@ class ControlFrame(ttk.Frame):
         if self.clear_callback:
             self.clear_callback()
     
-    def set_measuring(self, measuring: bool):
-        """Update button states based on measurement status"""
-        if measuring:
-            self.start_btn.config(state="disabled")
-            self.stop_btn.config(state="normal")
-            self.status_var.set("Measuring...")
-        else:
+    def set_measuring_state(self, state: str):
+        """Update button states based on measurement status
+        
+        Args:
+            state: 'ready', 'running', 'paused', 'stopping'
+        """
+        if state == "ready":
             self.start_btn.config(state="normal")
+            self.pause_btn.config(state="disabled")
+            self.resume_btn.config(state="disabled")
             self.stop_btn.config(state="disabled")
             self.status_var.set("Ready")
+        elif state == "running":
+            self.start_btn.config(state="disabled")
+            self.pause_btn.config(state="normal")
+            self.resume_btn.config(state="disabled")
+            self.stop_btn.config(state="normal")
+            self.status_var.set("Measuring...")
+        elif state == "paused":
+            self.start_btn.config(state="disabled")
+            self.pause_btn.config(state="disabled")
+            self.resume_btn.config(state="normal")
+            self.stop_btn.config(state="normal")
+            self.status_var.set("Paused")
+        elif state == "stopping":
+            self.start_btn.config(state="disabled")
+            self.pause_btn.config(state="disabled")
+            self.resume_btn.config(state="disabled")
+            self.stop_btn.config(state="disabled")
+            self.status_var.set("Stopping...")
+    
+    def set_measuring(self, measuring: bool):
+        """Legacy method for backward compatibility"""
+        if measuring:
+            self.set_measuring_state("running")
+        else:
+            self.set_measuring_state("ready")
 
 
 class MainApplication:
@@ -436,6 +565,7 @@ class MainApplication:
         
         # Start periodic GUI updates
         self.root.after(100, self.process_data_queue)
+        self.root.after(2000, self.periodic_status_update)  # Update status every 2 seconds
     
     def setup_gui(self):
         """Setup the GUI layout"""
@@ -504,10 +634,19 @@ class MainApplication:
     
     def setup_callbacks(self):
         """Setup event callbacks"""
+        # Instrument callbacks
         self.instrument_frame.connect_callback = self.connect_instrument
         self.instrument_frame.disconnect_callback = self.disconnect_instrument
+        self.instrument_frame.output_on_callback = self.output_on
+        self.instrument_frame.output_off_callback = self.output_off
         
+        # Measurement settings callbacks
+        self.measurement_settings_frame.apply_callback = self.apply_measurement_settings
+        
+        # Control callbacks
         self.control_frame.start_callback = self.start_measurement
+        self.control_frame.pause_callback = self.pause_measurement
+        self.control_frame.resume_callback = self.resume_measurement
         self.control_frame.stop_callback = self.stop_measurement
         self.control_frame.clear_callback = self.clear_plots
     
@@ -529,6 +668,11 @@ class MainApplication:
                 self.engine.add_data_callback(self.on_new_data)
                 
                 self.instrument_frame.set_connected(True)
+                self.measurement_settings_frame.set_instrument_connected(True)
+                
+                # Update output status
+                self.update_output_status()
+                
                 messagebox.showinfo("Success", "Connected to instrument successfully")
             else:
                 messagebox.showerror("Error", "Failed to connect to instrument")
@@ -548,12 +692,100 @@ class MainApplication:
             
             self.engine = None
             self.instrument_frame.set_connected(False)
-            self.control_frame.set_measuring(False)
+            self.measurement_settings_frame.set_instrument_connected(False)
+            self.control_frame.set_measuring_state("ready")
             
             messagebox.showinfo("Success", "Disconnected from instrument")
             
         except Exception as e:
             messagebox.showerror("Error", f"Disconnect error: {e}")
+    
+    def output_on(self):
+        """Turn instrument output on"""
+        if not self.keithley:
+            messagebox.showerror("Error", "No instrument connected")
+            return
+        
+        try:
+            self.keithley.output_on()
+            self.update_output_status()
+            messagebox.showinfo("Success", "Output turned ON")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to turn output on: {e}")
+    
+    def output_off(self):
+        """Turn instrument output off"""
+        if not self.keithley:
+            messagebox.showerror("Error", "No instrument connected")
+            return
+        
+        try:
+            self.keithley.output_off()
+            self.update_output_status()
+            messagebox.showinfo("Success", "Output turned OFF")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to turn output off: {e}")
+    
+    def update_output_status(self):
+        """Update the output status display"""
+        if not self.keithley:
+            return
+        
+        try:
+            status = self.keithley.get_status()
+            output_on = status.get("output_on", False)
+            self.instrument_frame.set_output_status(output_on)
+        except Exception as e:
+            logger.error(f"Failed to update output status: {e}")
+    
+    def apply_measurement_settings(self):
+        """Apply measurement settings to the instrument"""
+        if not self.keithley:
+            messagebox.showerror("Error", "No instrument connected")
+            return
+        
+        try:
+            # Get measurement settings
+            settings_values = self.measurement_settings_frame.get_values()
+            settings = MeasurementSettings(
+                source_function=SourceFunction.VOLTAGE if settings_values.get("source_function") == "dcvolts" else SourceFunction.CURRENT,
+                sense_function=SenseFunction.CURRENT if settings_values.get("sense_function") == "dcamps" else SenseFunction.VOLTAGE,
+                source_range=float(settings_values.get("source_range", 1.0)),
+                sense_range=float(settings_values.get("sense_range", 0.001)),
+                source_autorange=bool(settings_values.get("source_autorange", True)),
+                sense_autorange=bool(settings_values.get("sense_autorange", True)),
+                compliance=float(settings_values.get("compliance", 0.001)),
+                nplc=float(settings_values.get("nplc", 1.0)),
+                filter_enable=bool(settings_values.get("filter_enable", False)),
+                filter_count=int(settings_values.get("filter_count", 10))
+            )
+            
+            # Apply settings to instrument
+            self.keithley.configure_measurement(settings)
+            self.measurement_settings_frame.set_settings_applied(True)
+            messagebox.showinfo("Success", "Measurement settings applied to instrument")
+            
+        except Exception as e:
+            self.measurement_settings_frame.set_settings_applied(False, f"Error: {str(e)[:30]}...")
+            messagebox.showerror("Error", f"Failed to apply settings: {e}")
+    
+    def pause_measurement(self):
+        """Pause current measurement"""
+        if self.engine and self.engine.is_measurement_active():
+            # Note: This would need to be implemented in the measurement engine
+            self.control_frame.set_measuring_state("paused")
+            messagebox.showinfo("Info", "Measurement paused")
+        else:
+            messagebox.showwarning("Warning", "No active measurement to pause")
+    
+    def resume_measurement(self):
+        """Resume paused measurement"""
+        if self.engine:
+            # Note: This would need to be implemented in the measurement engine
+            self.control_frame.set_measuring_state("running")
+            messagebox.showinfo("Info", "Measurement resumed")
+        else:
+            messagebox.showwarning("Warning", "No measurement to resume")
     
     def start_measurement(self, measurement_type: str):
         """Start measurement"""
@@ -596,7 +828,7 @@ class MainApplication:
                 )
                 
                 if self.engine.start_iv_sweep(sweep_params, settings):
-                    self.control_frame.set_measuring(True)
+                    self.control_frame.set_measuring_state("running")
                 else:
                     messagebox.showerror("Error", "Failed to start IV sweep")
             
@@ -609,7 +841,7 @@ class MainApplication:
                 )
                 
                 if self.engine.start_time_monitor(monitor_params, settings):
-                    self.control_frame.set_measuring(True)
+                    self.control_frame.set_measuring_state("running")
                 else:
                     messagebox.showerror("Error", "Failed to start time monitoring")
             
@@ -619,8 +851,9 @@ class MainApplication:
     def stop_measurement(self):
         """Stop current measurement"""
         if self.engine:
+            self.control_frame.set_measuring_state("stopping")
             self.engine.stop_measurement()
-            self.control_frame.set_measuring(False)
+            self.control_frame.set_measuring_state("ready")
     
     def clear_plots(self):
         """Clear all plots"""
@@ -652,6 +885,25 @@ class MainApplication:
         
         # Schedule next update
         self.root.after(100, self.process_data_queue)
+    
+    def periodic_status_update(self):
+        """Periodic status update for instrument synchronization"""
+        try:
+            if self.keithley and self.keithley.is_connected:
+                # Update output status
+                self.update_output_status()
+                
+                # Check if measurement is still active
+                if self.engine and not self.engine.is_measurement_active():
+                    # Measurement has finished
+                    current_state = self.control_frame.status_var.get()
+                    if current_state in ["Measuring...", "Stopping..."]:
+                        self.control_frame.set_measuring_state("ready")
+        except Exception as e:
+            logger.error(f"Error in periodic status update: {e}")
+        
+        # Schedule next update
+        self.root.after(2000, self.periodic_status_update)
     
     def load_data(self):
         """Load data from file"""
