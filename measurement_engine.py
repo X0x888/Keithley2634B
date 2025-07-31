@@ -70,6 +70,11 @@ class DataAcquisitionEngine:
         # Control flags
         self.is_measuring = False
         self.should_stop = False
+        self.is_paused = False
+        self.pause_event = threading.Event()
+        self.pause_event.set()  # Initially not paused
+        self.pause_start_time: Optional[datetime] = None
+        self.total_pause_time = 0.0  # Total time spent paused
         
         # Threads
         self.measurement_thread: Optional[threading.Thread] = None
@@ -316,6 +321,10 @@ class DataAcquisitionEngine:
             
             # Start save thread
             self.should_stop = False
+            self.is_paused = False
+            self.pause_event.set()  # Ensure not paused at start
+            self.pause_start_time = None
+            self.total_pause_time = 0.0
             self.save_thread = threading.Thread(target=self._save_worker)
             self.save_thread.start()
             
@@ -358,6 +367,9 @@ class DataAcquisitionEngine:
                 for point_idx, voltage in enumerate(sweep_values):
                     if self.should_stop:
                         break
+                    
+                    # Wait if paused
+                    self.pause_event.wait()
                     
                     try:
                         # Set source level
@@ -424,6 +436,9 @@ class DataAcquisitionEngine:
                     for point_idx, voltage in enumerate(sweep_values):
                         if self.should_stop:
                             break
+                        
+                        # Wait if paused
+                        self.pause_event.wait()
                         
                         try:
                             self.keithley.set_source_level(voltage)
@@ -512,6 +527,10 @@ class DataAcquisitionEngine:
             
             # Start save thread
             self.should_stop = False
+            self.is_paused = False
+            self.pause_event.set()  # Ensure not paused at start
+            self.pause_start_time = None
+            self.total_pause_time = 0.0
             self.save_thread = threading.Thread(target=self._save_worker)
             self.save_thread.start()
             
@@ -546,6 +565,9 @@ class DataAcquisitionEngine:
             point_count = 0
             
             while not self.should_stop and (time.time() - start_time) < monitor_params.duration:
+                # Wait if paused
+                self.pause_event.wait()
+                
                 try:
                     # Perform measurement
                     source_val, measured_val, resistance, timestamp = self.keithley.measure()
@@ -595,6 +617,12 @@ class DataAcquisitionEngine:
         logger.info("Stopping measurement...")
         self.should_stop = True
         
+        # If paused, resume to allow threads to see the stop signal
+        if self.is_paused:
+            logger.info("Resuming paused measurement to allow clean stop...")
+            self.is_paused = False
+            self.pause_event.set()
+        
         # Wait for measurement thread to finish
         if self.measurement_thread and self.measurement_thread.is_alive():
             logger.info("Waiting for measurement thread to finish...")
@@ -623,6 +651,56 @@ class DataAcquisitionEngine:
         """Check if measurement is currently active"""
         return self.is_measuring
     
+    def pause_measurement(self) -> bool:
+        """Pause current measurement"""
+        if not self.is_measuring:
+            logger.warning("No active measurement to pause")
+            return False
+        
+        if self.is_paused:
+            logger.warning("Measurement is already paused")
+            return False
+        
+        logger.info("Pausing measurement...")
+        self.is_paused = True
+        self.pause_start_time = datetime.now()
+        self.pause_event.clear()  # Block measurement threads
+        
+        # Force file sync before pausing
+        self.save_queue.put("__SYNC_MARKER__")
+        
+        logger.info("Measurement paused")
+        return True
+    
+    def resume_measurement(self) -> bool:
+        """Resume paused measurement"""
+        if not self.is_measuring:
+            logger.warning("No measurement to resume")
+            return False
+        
+        if not self.is_paused:
+            logger.warning("Measurement is not paused")
+            return False
+        
+        logger.info("Resuming measurement...")
+        
+        # Track pause time
+        if self.pause_start_time:
+            pause_duration = (datetime.now() - self.pause_start_time).total_seconds()
+            self.total_pause_time += pause_duration
+            logger.info(f"Paused for {pause_duration:.1f} seconds (total pause time: {self.total_pause_time:.1f}s)")
+        
+        self.is_paused = False
+        self.pause_start_time = None
+        self.pause_event.set()  # Unblock measurement threads
+        
+        logger.info("Measurement resumed")
+        return True
+    
+    def is_measurement_paused(self) -> bool:
+        """Check if measurement is currently paused"""
+        return self.is_paused
+    
     def force_file_sync(self):
         """Force synchronization of save queue - useful for debugging"""
         if self.save_thread and self.save_thread.is_alive():
@@ -634,6 +712,7 @@ class DataAcquisitionEngine:
         """Get current measurement status"""
         status = {
             'is_measuring': self.is_measuring,
+            'is_paused': self.is_paused,
             'start_time': self.measurement_start_time,
             'data_queue_size': self.data_queue.qsize(),
             'save_queue_size': self.save_queue.qsize()

@@ -1044,6 +1044,14 @@ class ControlFrame(ttk.Frame):
         ttk.Label(sweep_info_frame, textvariable=self.sweep_info_var, 
                  font=("TkDefaultFont", 8)).pack()
         
+        # Keyboard shortcuts help
+        shortcuts_frame = ttk.LabelFrame(self, text="Keyboard Shortcuts", padding="5")
+        shortcuts_frame.pack(fill="x", pady=5)
+        
+        shortcuts_text = "Space: Pause/Resume  •  Escape: Stop"
+        ttk.Label(shortcuts_frame, text=shortcuts_text, 
+                 font=("TkDefaultFont", 7), foreground="gray").pack()
+        
         # Callbacks
         self.start_callback: Optional[Callable] = None
         self.pause_callback: Optional[Callable] = None
@@ -1187,6 +1195,11 @@ class MainApplication:
         # Start periodic GUI updates
         self.root.after(100, self.process_data_queue)
         self.root.after(2000, self.periodic_status_update)  # Update status every 2 seconds
+        
+        # Keyboard shortcuts
+        self.root.bind('<space>', self.toggle_pause_resume)
+        self.root.bind('<Escape>', self.stop_measurement_shortcut)
+        self.root.focus_set()  # Enable keyboard shortcuts
     
     def setup_gui(self):
         """Setup the GUI layout"""
@@ -1518,18 +1531,24 @@ class MainApplication:
     def pause_measurement(self):
         """Pause current measurement"""
         if self.engine and self.engine.is_measurement_active():
-            # Note: This would need to be implemented in the measurement engine
-            self.control_frame.set_measuring_state("paused")
-            messagebox.showinfo("Info", "Measurement paused")
+            success = self.engine.pause_measurement()
+            if success:
+                self.control_frame.set_measuring_state("paused")
+                messagebox.showinfo("Info", "Measurement paused successfully")
+            else:
+                messagebox.showwarning("Warning", "Failed to pause measurement")
         else:
             messagebox.showwarning("Warning", "No active measurement to pause")
     
     def resume_measurement(self):
         """Resume paused measurement"""
         if self.engine:
-            # Note: This would need to be implemented in the measurement engine
-            self.control_frame.set_measuring_state("running")
-            messagebox.showinfo("Info", "Measurement resumed")
+            success = self.engine.resume_measurement()
+            if success:
+                self.control_frame.set_measuring_state("running")
+                messagebox.showinfo("Info", "Measurement resumed successfully")
+            else:
+                messagebox.showwarning("Warning", "Failed to resume measurement - check if measurement is paused")
         else:
             messagebox.showwarning("Warning", "No measurement to resume")
     
@@ -1647,12 +1666,23 @@ class MainApplication:
                 # Update output status
                 self.update_output_status()
                 
-                # Check if measurement is still active
-                if self.engine and not self.engine.is_measurement_active():
-                    # Measurement has finished
-                    current_state = self.control_frame.status_var.get()
-                    if current_state in ["Measuring...", "Stopping..."]:
-                        self.control_frame.set_measuring_state("ready")
+                # Check measurement state
+                if self.engine:
+                    if not self.engine.is_measurement_active():
+                        # Measurement has finished
+                        current_state = self.control_frame.status_var.get()
+                        if current_state in ["Measuring...", "Stopping...", "Paused"]:
+                            self.control_frame.set_measuring_state("ready")
+                    elif self.engine.is_measurement_paused():
+                        # Ensure GUI shows paused state
+                        current_state = self.control_frame.status_var.get()
+                        if current_state not in ["Paused"]:
+                            self.control_frame.set_measuring_state("paused")
+                    elif self.engine.is_measurement_active() and not self.engine.is_measurement_paused():
+                        # Ensure GUI shows running state
+                        current_state = self.control_frame.status_var.get()
+                        if current_state not in ["Measuring..."]:
+                            self.control_frame.set_measuring_state("running")
             
             # Update sweep information display
             sweep_info = self.plot_frame.get_sweep_info()
@@ -1847,6 +1877,21 @@ class MainApplication:
             messagebox.showinfo("File Sync", "File synchronization forced.\nCheck console logs for detailed file status.")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to force file sync:\n{e}")
+    
+    def toggle_pause_resume(self, event=None):
+        """Toggle between pause and resume (Spacebar shortcut)"""
+        if not self.engine or not self.engine.is_measurement_active():
+            return
+        
+        if self.engine.is_measurement_paused():
+            self.resume_measurement()
+        else:
+            self.pause_measurement()
+    
+    def stop_measurement_shortcut(self, event=None):
+        """Stop measurement (Escape key shortcut)"""
+        if self.engine and self.engine.is_measurement_active():
+            self.stop_measurement()
     
     def show_about(self):
         """Show about dialog"""
