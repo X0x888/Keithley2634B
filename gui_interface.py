@@ -13,6 +13,7 @@ import pandas as pd
 import threading
 import queue
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Callable, Tuple
 import logging
 
@@ -545,6 +546,9 @@ class SweepParametersFrame(ParameterFrame):
         self.segments_listbox = tk.Listbox(self.segments_frame, height=4)
         self.segments_listbox.grid(row=0, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
         
+        # Bind double-click event for editing segments
+        self.segments_listbox.bind("<Double-Button-1>", self.edit_segment)
+        
         # Segment controls
         ttk.Label(self.segments_frame, text="Start:").grid(row=1, column=0, padx=2)
         self.start_var = tk.DoubleVar(value=0.0)
@@ -592,6 +596,115 @@ class SweepParametersFrame(ParameterFrame):
     def clear_segments(self):
         """Clear all segments"""
         self.segments_listbox.delete(0, tk.END)
+    
+    def edit_segment(self, event=None):
+        """Edit selected segment via double-click"""
+        selection = self.segments_listbox.curselection()
+        if not selection:
+            return
+        
+        index = selection[0]
+        segment_str = self.segments_listbox.get(index)
+        
+        # Parse current segment values
+        try:
+            parts = segment_str.replace('V', '').replace('(', '').replace('pts)', '').split()
+            current_start = float(parts[0])
+            current_stop = float(parts[2])
+            current_points = int(parts[3])
+        except Exception as e:
+            logger.error(f"Error parsing segment for editing: {e}")
+            return
+        
+        # Create edit dialog
+        self._show_segment_edit_dialog(index, current_start, current_stop, current_points)
+    
+    def _show_segment_edit_dialog(self, index: int, start: float, stop: float, points: int):
+        """Show dialog for editing segment parameters"""
+        dialog = tk.Toplevel(self)
+        dialog.title("Edit Sweep Segment")
+        dialog.geometry("300x200")
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        # Center the dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Variables for dialog
+        start_var = tk.DoubleVar(value=start)
+        stop_var = tk.DoubleVar(value=stop)
+        points_var = tk.IntVar(value=points)
+        
+        # Dialog content
+        main_frame = ttk.Frame(dialog, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text="Edit Sweep Segment", font=("TkDefaultFont", 10, "bold")).pack(pady=(0, 10))
+        
+        # Start value
+        start_frame = ttk.Frame(main_frame)
+        start_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(start_frame, text="Start (V):").pack(side=tk.LEFT)
+        start_entry = ttk.Entry(start_frame, textvariable=start_var, width=15)
+        start_entry.pack(side=tk.RIGHT)
+        
+        # Stop value
+        stop_frame = ttk.Frame(main_frame)
+        stop_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(stop_frame, text="Stop (V):").pack(side=tk.LEFT)
+        stop_entry = ttk.Entry(stop_frame, textvariable=stop_var, width=15)
+        stop_entry.pack(side=tk.RIGHT)
+        
+        # Points value
+        points_frame = ttk.Frame(main_frame)
+        points_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(points_frame, text="Points:").pack(side=tk.LEFT)
+        points_entry = ttk.Entry(points_frame, textvariable=points_var, width=15)
+        points_entry.pack(side=tk.RIGHT)
+        
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(15, 0))
+        
+        def save_changes():
+            try:
+                new_start = start_var.get()
+                new_stop = stop_var.get()
+                new_points = points_var.get()
+                
+                if new_points <= 0:
+                    tk.messagebox.showerror("Invalid Input", "Points must be greater than 0")
+                    return
+                
+                # Update the segment in the listbox
+                new_segment_str = f"{new_start}V → {new_stop}V ({new_points} pts)"
+                self.segments_listbox.delete(index)
+                self.segments_listbox.insert(index, new_segment_str)
+                self.segments_listbox.selection_set(index)  # Keep it selected
+                
+                dialog.destroy()
+                
+            except ValueError:
+                tk.messagebox.showerror("Invalid Input", "Please enter valid numeric values")
+        
+        def delete_segment():
+            result = tk.messagebox.askyesno("Delete Segment", "Are you sure you want to delete this segment?")
+            if result:
+                self.segments_listbox.delete(index)
+                dialog.destroy()
+        
+        ttk.Button(button_frame, text="Save", command=save_changes).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="Delete", command=delete_segment).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
+        
+        # Focus on first entry and select all text
+        start_entry.focus()
+        start_entry.select_range(0, tk.END)
+    
+
     
     def get_segments(self) -> List[Tuple[float, float, int]]:
         """Get list of sweep segments"""
@@ -722,6 +835,18 @@ class ControlFrame(ttk.Frame):
         ttk.Radiobutton(type_frame, text="Time Monitor", variable=self.measurement_type, 
                        value="time_monitor").pack(side="left", padx=10)
         
+        # Custom filename field
+        filename_frame = ttk.LabelFrame(self, text="Data File Settings", padding="5")
+        filename_frame.pack(fill="x", pady=5)
+        
+        ttk.Label(filename_frame, text="Custom Name:").pack(side="left", padx=(0, 5))
+        self.custom_filename_var = tk.StringVar(value="")
+        self.custom_filename_entry = ttk.Entry(filename_frame, textvariable=self.custom_filename_var, width=25)
+        self.custom_filename_entry.pack(side="left", padx=(0, 5))
+        
+        ttk.Label(filename_frame, text="(will be prefixed to auto-generated name)", 
+                 font=("TkDefaultFont", 8)).pack(side="left", padx=(5, 0))
+        
         # Control buttons
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill="x", pady=10)
@@ -754,6 +879,38 @@ class ControlFrame(ttk.Frame):
         self.resume_callback: Optional[Callable] = None
         self.stop_callback: Optional[Callable] = None
         self.clear_callback: Optional[Callable] = None
+    
+    def get_custom_filename(self) -> str:
+        """Get custom filename from entry field"""
+        return self.custom_filename_var.get().strip()
+    
+    def validate_filename(self, filename: str) -> tuple[bool, str]:
+        """Validate filename for filesystem compatibility
+        
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        if not filename:
+            return True, ""  # Empty filename is okay
+        
+        # Check for invalid characters
+        invalid_chars = '<>:"/\\|?*'
+        for char in invalid_chars:
+            if char in filename:
+                return False, f"Filename contains invalid character: '{char}'"
+        
+        # Check length
+        if len(filename) > 100:
+            return False, "Filename too long (max 100 characters)"
+        
+        # Check for reserved names (Windows)
+        reserved_names = ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 
+                         'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 
+                         'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9']
+        if filename.upper() in reserved_names:
+            return False, f"'{filename}' is a reserved filename"
+        
+        return True, ""
     
     def on_start(self):
         """Handle start button click"""
@@ -958,6 +1115,8 @@ class MainApplication:
         advanced_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Advanced", menu=advanced_menu)
         advanced_menu.add_command(label="Command Console", command=self.show_command_console)
+        advanced_menu.add_separator()
+        advanced_menu.add_command(label="Recover from Cache", command=self.show_cache_recovery)
         
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -1189,6 +1348,13 @@ class MainApplication:
             return
         
         try:
+            # Validate custom filename first
+            custom_filename = self.control_frame.get_custom_filename()
+            is_valid, error_msg = self.control_frame.validate_filename(custom_filename)
+            if not is_valid:
+                messagebox.showerror("Invalid Filename", error_msg)
+                return
+            
             # Get measurement settings
             settings_values = self.measurement_settings_frame.get_values()
             settings = MeasurementSettings(
@@ -1222,7 +1388,7 @@ class MainApplication:
                     settle_time=float(sweep_values.get("settle_time", 0.0))
                 )
                 
-                if self.engine.start_iv_sweep(sweep_params, settings):
+                if self.engine.start_iv_sweep(sweep_params, settings, custom_filename):
                     self.control_frame.set_measuring_state("running")
                 else:
                     messagebox.showerror("Error", "Failed to start IV sweep")
@@ -1333,6 +1499,83 @@ class MainApplication:
             CommandConsoleDialog(self.root, self.keithley)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open command console:\n{e}")
+    
+    def show_cache_recovery(self):
+        """Show cache recovery dialog"""
+        if not self.engine:
+            messagebox.showwarning("Warning", "No data engine available")
+            return
+        
+        cache_dir = Path("data/cache")
+        if not cache_dir.exists():
+            messagebox.showinfo("Info", "No cache directory found")
+            return
+        
+        # Find cache files
+        cache_files = list(cache_dir.glob("cache_*.csv"))
+        if not cache_files:
+            messagebox.showinfo("Info", "No cache files found")
+            return
+        
+        # Create recovery dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Data Recovery from Cache")
+        dialog.geometry("500x300")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        main_frame = ttk.Frame(dialog, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text="Available Cache Files:", 
+                 font=("TkDefaultFont", 10, "bold")).pack(anchor="w", pady=(0, 10))
+        
+        # Listbox for cache files
+        listbox_frame = ttk.Frame(main_frame)
+        listbox_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        cache_listbox = tk.Listbox(listbox_frame, height=8)
+        cache_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=cache_listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        cache_listbox.config(yscrollcommand=scrollbar.set)
+        
+        # Populate listbox
+        for cache_file in sorted(cache_files, key=lambda x: x.stat().st_mtime, reverse=True):
+            # Show filename and modification time
+            mod_time = datetime.fromtimestamp(cache_file.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            display_text = f"{cache_file.name} ({mod_time})"
+            cache_listbox.insert(tk.END, display_text)
+        
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X)
+        
+        def recover_selected():
+            selection = cache_listbox.curselection()
+            if not selection:
+                messagebox.showwarning("Warning", "Please select a cache file")
+                return
+            
+            cache_file = cache_files[selection[0]]
+            try:
+                if self.engine.recover_from_cache(str(cache_file)):
+                    messagebox.showinfo("Success", f"Data recovered successfully!")
+                    dialog.destroy()
+                else:
+                    messagebox.showerror("Error", "Failed to recover data from cache")
+            except Exception as e:
+                messagebox.showerror("Error", f"Recovery error: {e}")
+        
+        ttk.Button(button_frame, text="Recover Selected", command=recover_selected).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
     
     def show_about(self):
         """Show about dialog"""

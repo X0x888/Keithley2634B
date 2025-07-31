@@ -81,6 +81,12 @@ class DataAcquisitionEngine:
         # Current measurement info
         self.current_measurement: Optional[MeasurementResult] = None
         self.measurement_start_time: Optional[datetime] = None
+        
+        # Cache mechanism for data backup
+        self.cache_directory = Path(save_directory) / "cache"
+        self.cache_directory.mkdir(exist_ok=True)
+        self.cache_file: Optional[Path] = None
+        self.cache_handle: Optional[Any] = None
     
     def add_data_callback(self, callback: Callable):
         """Add callback function for real-time data updates"""
@@ -99,10 +105,75 @@ class DataAcquisitionEngine:
             except Exception as e:
                 logger.error(f"Callback error: {e}")
     
-    def _generate_filename(self, measurement_type: MeasurementType) -> str:
+    def _generate_filename(self, measurement_type: MeasurementType, custom_name: str = "") -> str:
         """Generate filename for measurement data"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"{measurement_type.value}_{timestamp}.csv"
+        base_name = f"{measurement_type.value}_{timestamp}"
+        
+        if custom_name:
+            # Sanitize custom name
+            custom_clean = "".join(c for c in custom_name if c.isalnum() or c in "._-")[:50]
+            return f"{custom_clean}_{base_name}.csv"
+        else:
+            return f"{base_name}.csv"
+    
+    def _init_cache(self, measurement_type: MeasurementType) -> Path:
+        """Initialize cache file for data backup"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        cache_filename = f"cache_{measurement_type.value}_{timestamp}.csv"
+        cache_path = self.cache_directory / cache_filename
+        
+        try:
+            self.cache_handle = open(cache_path, 'w', newline='')
+            logger.info(f"Cache initialized: {cache_path}")
+            return cache_path
+        except Exception as e:
+            logger.error(f"Failed to initialize cache: {e}")
+            return None
+    
+    def _write_to_cache(self, data: str):
+        """Write data to cache file immediately"""
+        if self.cache_handle:
+            try:
+                self.cache_handle.write(data + '\n')
+                self.cache_handle.flush()  # Force immediate write
+                import os
+                os.fsync(self.cache_handle.fileno())  # Force OS to write to disk
+            except Exception as e:
+                logger.error(f"Cache write error: {e}")
+    
+    def _close_cache(self):
+        """Close cache file"""
+        if self.cache_handle:
+            try:
+                self.cache_handle.close()
+                self.cache_handle = None
+                logger.info("Cache closed successfully")
+            except Exception as e:
+                logger.error(f"Error closing cache: {e}")
+    
+    def recover_from_cache(self, cache_file_path: str) -> bool:
+        """Recover data from cache file to main data file"""
+        try:
+            cache_path = Path(cache_file_path)
+            if not cache_path.exists():
+                logger.error(f"Cache file not found: {cache_path}")
+                return False
+            
+            # Generate recovery filename
+            recovery_filename = f"recovered_{cache_path.stem}.csv"
+            recovery_path = self.save_directory / recovery_filename
+            
+            # Copy cache to recovery file
+            import shutil
+            shutil.copy2(cache_path, recovery_path)
+            
+            logger.info(f"Data recovered from cache to: {recovery_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Cache recovery failed: {e}")
+            return False
     
     def _save_worker(self):
         """Worker thread for saving data to file"""
@@ -128,13 +199,16 @@ class DataAcquisitionEngine:
                         # Write header
                         if 'header' in item:
                             file_handle.write(item['header'] + '\n')
+                            # Also write header to cache
+                            self._write_to_cache(item['header'])
                         
                         logger.info(f"Started saving to {current_file}")
                     
                     elif isinstance(item, str) and file_handle:
-                        # Data line
+                        # Data line - write to both main file and cache
                         file_handle.write(item + '\n')
                         file_handle.flush()  # Ensure data is written immediately
+                        self._write_to_cache(item)  # Also write to cache
                 
                 except queue.Empty:
                     continue
@@ -146,7 +220,8 @@ class DataAcquisitionEngine:
                 file_handle.close()
     
     def start_iv_sweep(self, sweep_params: SweepParameters, 
-                      measurement_settings: MeasurementSettings) -> bool:
+                      measurement_settings: MeasurementSettings,
+                      custom_filename: str = "") -> bool:
         """
         Start IV sweep measurement
         
@@ -167,10 +242,13 @@ class DataAcquisitionEngine:
             
             # Initialize measurement
             self.measurement_start_time = datetime.now()
-            filename = self._generate_filename(MeasurementType.IV_SWEEP)
+            filename = self._generate_filename(MeasurementType.IV_SWEEP, custom_filename)
             
-            # Create header
-            header = "timestamp,source_value,measured_value,resistance,segment,point_index"
+            # Initialize cache
+            self.cache_file = self._init_cache(MeasurementType.IV_SWEEP)
+            
+            # Create header with sweep_number
+            header = "timestamp,source_value,measured_value,resistance,segment,point_index,sweep_number"
             
             # Start save thread
             self.should_stop = False
@@ -205,6 +283,8 @@ class DataAcquisitionEngine:
             self.keithley.output_on()
             
             total_points = 0
+            sweep_number = 1  # Start sweep numbering from 1
+            
             for segment_idx, (start, stop, points) in enumerate(sweep_params.segments):
                 logger.info(f"Starting segment {segment_idx + 1}: {start}V to {stop}V, {points} points")
                 
@@ -226,20 +306,24 @@ class DataAcquisitionEngine:
                         # Perform measurement
                         source_val, measured_val, resistance, timestamp = self.keithley.measure()
                         
+                        # Calculate relative timestamp (seconds from start)
+                        relative_timestamp = (datetime.now() - self.measurement_start_time).total_seconds()
+                        
                         # Create data point
                         data_point = {
-                            'timestamp': timestamp,
+                            'timestamp': relative_timestamp,  # Use relative timestamp
                             'source_value': source_val,
                             'measured_value': measured_val,
                             'resistance': resistance,
                             'segment': segment_idx,
                             'point_index': total_points,
+                            'sweep_number': sweep_number,  # Add sweep number
                             'voltage': source_val if self.keithley.settings.source_function == SourceFunction.VOLTAGE else measured_val,
                             'current': measured_val if self.keithley.settings.source_function == SourceFunction.VOLTAGE else source_val
                         }
                         
-                        # Save data
-                        data_line = f"{timestamp},{source_val},{measured_val},{resistance},{segment_idx},{total_points}"
+                        # Save data with sweep_number and relative timestamp
+                        data_line = f"{relative_timestamp:.3f},{source_val},{measured_val},{resistance},{segment_idx},{total_points},{sweep_number}"
                         self.save_queue.put(data_line)
                         
                         # Notify callbacks
@@ -256,6 +340,9 @@ class DataAcquisitionEngine:
                 
                 if self.should_stop:
                     break
+                
+                # Increment sweep number for next segment
+                sweep_number += 1
             
             # Bidirectional sweep - return to start
             if sweep_params.bidirectional and not self.should_stop:
@@ -278,18 +365,22 @@ class DataAcquisitionEngine:
                             
                             source_val, measured_val, resistance, timestamp = self.keithley.measure()
                             
+                            # Calculate relative timestamp
+                            relative_timestamp = (datetime.now() - self.measurement_start_time).total_seconds()
+                            
                             data_point = {
-                                'timestamp': timestamp,
+                                'timestamp': relative_timestamp,  # Use relative timestamp
                                 'source_value': source_val,
                                 'measured_value': measured_val,
                                 'resistance': resistance,
                                 'segment': len(sweep_params.segments) + segment_idx,
                                 'point_index': total_points,
+                                'sweep_number': sweep_number,  # Add sweep number
                                 'voltage': source_val if self.keithley.settings.source_function == SourceFunction.VOLTAGE else measured_val,
                                 'current': measured_val if self.keithley.settings.source_function == SourceFunction.VOLTAGE else source_val
                             }
                             
-                            data_line = f"{timestamp},{source_val},{measured_val},{resistance},{len(sweep_params.segments) + segment_idx},{total_points}"
+                            data_line = f"{relative_timestamp:.3f},{source_val},{measured_val},{resistance},{len(sweep_params.segments) + segment_idx},{total_points},{sweep_number}"
                             self.save_queue.put(data_line)
                             
                             self._notify_data_callbacks(data_point)
@@ -304,6 +395,9 @@ class DataAcquisitionEngine:
                     
                     if self.should_stop:
                         break
+                
+                # Increment sweep number for next bidirectional segment
+                sweep_number += 1
         
         except Exception as e:
             logger.error(f"IV sweep worker error: {e}")
@@ -311,6 +405,7 @@ class DataAcquisitionEngine:
         finally:
             self.keithley.output_off()
             self.is_measuring = False
+            self._close_cache()  # Close cache file
             logger.info(f"IV sweep completed. Total points: {total_points}")
     
     def start_time_monitor(self, monitor_params: MonitorParameters,
