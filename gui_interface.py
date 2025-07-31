@@ -23,6 +23,253 @@ from data_manager import DataManager
 logger = logging.getLogger(__name__)
 
 
+class CommandConsoleDialog:
+    """Advanced command console for direct TSP communication"""
+    
+    def __init__(self, parent, keithley_instance):
+        self.parent = parent
+        self.keithley = keithley_instance
+        
+        # Create dialog window
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Advanced Command Console")
+        self.dialog.geometry("800x600")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        
+        self.setup_console_gui()
+        
+        # Command history
+        self.command_history = []
+        self.history_index = -1
+        
+    def setup_console_gui(self):
+        """Setup the console GUI"""
+        # Main frame
+        main_frame = ttk.Frame(self.dialog)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Instructions
+        instructions = ttk.Label(main_frame, text="Advanced TSP Command Console - Direct communication with Keithley 2634B", 
+                                font=("TkDefaultFont", 10, "bold"))
+        instructions.pack(pady=(0, 10))
+        
+        warning = ttk.Label(main_frame, text="⚠️ Warning: Direct commands can affect instrument state. Use with caution!", 
+                           foreground="red")
+        warning.pack(pady=(0, 10))
+        
+        # Output area (read-only)
+        output_frame = ttk.LabelFrame(main_frame, text="Output", padding="5")
+        output_frame.pack(fill="both", expand=True, pady=(0, 10))
+        
+        # Text widget with scrollbar
+        self.output_text = tk.Text(output_frame, wrap=tk.WORD, height=20, font=("Consolas", 9))
+        output_scrollbar = ttk.Scrollbar(output_frame, orient="vertical", command=self.output_text.yview)
+        self.output_text.configure(yscrollcommand=output_scrollbar.set)
+        
+        self.output_text.pack(side="left", fill="both", expand=True)
+        output_scrollbar.pack(side="right", fill="y")
+        
+        # Input area
+        input_frame = ttk.LabelFrame(main_frame, text="Command Input", padding="5")
+        input_frame.pack(fill="x", pady=(0, 10))
+        
+        # Command type selection
+        type_frame = ttk.Frame(input_frame)
+        type_frame.pack(fill="x", pady=(0, 5))
+        
+        self.command_type = tk.StringVar(value="write")
+        ttk.Radiobutton(type_frame, text="Write Command", variable=self.command_type, value="write").pack(side="left", padx=(0, 20))
+        ttk.Radiobutton(type_frame, text="Query Command", variable=self.command_type, value="query").pack(side="left")
+        
+        # Command entry
+        entry_frame = ttk.Frame(input_frame)
+        entry_frame.pack(fill="x", pady=(0, 5))
+        
+        ttk.Label(entry_frame, text="Command:").pack(side="left", padx=(0, 5))
+        self.command_entry = ttk.Entry(entry_frame, font=("Consolas", 9))
+        self.command_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        # Buttons
+        button_frame = ttk.Frame(input_frame)
+        button_frame.pack(fill="x")
+        
+        self.execute_btn = ttk.Button(button_frame, text="Execute", command=self.execute_command)
+        self.execute_btn.pack(side="left", padx=(0, 5))
+        
+        ttk.Button(button_frame, text="Clear Output", command=self.clear_output).pack(side="left", padx=(0, 5))
+        ttk.Button(button_frame, text="Check Errors", command=self.check_errors).pack(side="left", padx=(0, 5))
+        ttk.Button(button_frame, text="Clear Errors", command=self.clear_errors).pack(side="left", padx=(0, 5))
+        
+        # Quick commands frame
+        quick_frame = ttk.LabelFrame(main_frame, text="Quick Commands", padding="5")
+        quick_frame.pack(fill="x", pady=(0, 10))
+        
+        quick_commands = [
+            ("Get Status", "print(status.operation.condition)"),
+            ("Get IDN", "*IDN?"),
+            ("Reset", "*RST"),
+            ("Get Output State", "print(smua.source.output)"),
+            ("Get Source Level", "print(smua.source.levelv)"),
+            ("Get Measure Function", "print(smua.sense)")
+        ]
+        
+        for i, (label, command) in enumerate(quick_commands):
+            btn = ttk.Button(quick_frame, text=label, 
+                           command=lambda cmd=command: self.insert_command(cmd),
+                           width=15)
+            btn.grid(row=i//3, column=i%3, padx=2, pady=2, sticky="ew")
+        
+        # Configure grid weights
+        for i in range(3):
+            quick_frame.grid_columnconfigure(i, weight=1)
+        
+        # Control buttons
+        control_frame = ttk.Frame(main_frame)
+        control_frame.pack(fill="x")
+        
+        ttk.Button(control_frame, text="Close", command=self.close_dialog).pack(side="right")
+        
+        # Bind events
+        self.command_entry.bind("<Return>", lambda e: self.execute_command())
+        self.command_entry.bind("<Up>", self.previous_command)
+        self.command_entry.bind("<Down>", self.next_command)
+        self.command_entry.focus()
+        
+        # Initial message
+        self.append_output("=== Keithley 2634B Command Console ===")
+        self.append_output("Connected to: " + (self.keithley.resource_name if self.keithley else "Not connected"))
+        self.append_output("Use Up/Down arrows to navigate command history")
+        self.append_output("Examples:")
+        self.append_output("  Write: smua.source.levelv = 1.0")
+        self.append_output("  Query: print(smua.measure.nplc)")
+        self.append_output("")
+    
+    def insert_command(self, command):
+        """Insert a command into the entry field"""
+        self.command_entry.delete(0, tk.END)
+        self.command_entry.insert(0, command)
+        if command.startswith("*") or command.startswith("print("):
+            self.command_type.set("query")
+        else:
+            self.command_type.set("write")
+    
+    def execute_command(self):
+        """Execute the entered command"""
+        if not self.keithley or not self.keithley.is_connected:
+            self.append_output("ERROR: No instrument connected", "error")
+            return
+        
+        command = self.command_entry.get().strip()
+        if not command:
+            return
+        
+        # Add to history
+        if command not in self.command_history:
+            self.command_history.append(command)
+        self.history_index = len(self.command_history)
+        
+        # Display command
+        cmd_type = self.command_type.get()
+        self.append_output(f">>> {cmd_type.upper()}: {command}", "command")
+        
+        try:
+            if cmd_type == "query":
+                result = self.keithley.query(command)
+                self.append_output(f"<<< {result}", "response")
+            else:
+                self.keithley.write(command)
+                self.append_output("<<< Command sent successfully", "success")
+                
+        except Exception as e:
+            self.append_output(f"<<< ERROR: {str(e)}", "error")
+        
+        # Clear entry
+        self.command_entry.delete(0, tk.END)
+    
+    def check_errors(self):
+        """Check instrument error queue"""
+        if not self.keithley or not self.keithley.is_connected:
+            self.append_output("ERROR: No instrument connected", "error")
+            return
+        
+        try:
+            errors = self.keithley.check_errors()
+            if errors:
+                self.append_output(f"=== Found {len(errors)} errors ===", "warning")
+                for error in errors:
+                    self.append_output(f"  {error}", "error")
+            else:
+                self.append_output("=== No errors in queue ===", "success")
+        except Exception as e:
+            self.append_output(f"ERROR checking errors: {e}", "error")
+    
+    def clear_errors(self):
+        """Clear instrument error queue"""
+        if not self.keithley or not self.keithley.is_connected:
+            self.append_output("ERROR: No instrument connected", "error")
+            return
+        
+        try:
+            self.keithley.clear_errors()
+            self.append_output("=== Error queue cleared ===", "success")
+        except Exception as e:
+            self.append_output(f"ERROR clearing errors: {e}", "error")
+    
+    def clear_output(self):
+        """Clear the output area"""
+        self.output_text.delete(1.0, tk.END)
+    
+    def append_output(self, text, tag="normal"):
+        """Append text to output area with optional styling"""
+        self.output_text.insert(tk.END, text + "\n")
+        
+        # Configure tags for styling
+        if tag == "command":
+            self.output_text.tag_configure("command", foreground="blue", font=("Consolas", 9, "bold"))
+        elif tag == "response":
+            self.output_text.tag_configure("response", foreground="green")
+        elif tag == "error":
+            self.output_text.tag_configure("error", foreground="red")
+        elif tag == "success":
+            self.output_text.tag_configure("success", foreground="green", font=("Consolas", 9, "bold"))
+        elif tag == "warning":
+            self.output_text.tag_configure("warning", foreground="orange", font=("Consolas", 9, "bold"))
+        
+        # Apply tag to last line
+        if tag != "normal":
+            line_start = self.output_text.index(tk.END + "-2l linestart")
+            line_end = self.output_text.index(tk.END + "-2l lineend")
+            self.output_text.tag_add(tag, line_start, line_end)
+        
+        # Auto-scroll to bottom
+        self.output_text.see(tk.END)
+    
+    def previous_command(self, event):
+        """Navigate to previous command in history"""
+        if self.command_history and self.history_index > 0:
+            self.history_index -= 1
+            self.command_entry.delete(0, tk.END)
+            self.command_entry.insert(0, self.command_history[self.history_index])
+    
+    def next_command(self, event):
+        """Navigate to next command in history"""
+        if self.command_history and self.history_index < len(self.command_history) - 1:
+            self.history_index += 1
+            self.command_entry.delete(0, tk.END)
+            self.command_entry.insert(0, self.command_history[self.history_index])
+        elif self.history_index >= len(self.command_history) - 1:
+            self.history_index = len(self.command_history)
+            self.command_entry.delete(0, tk.END)
+    
+    def close_dialog(self):
+        """Close the dialog"""
+        self.dialog.destroy()
+
+
+logger = logging.getLogger(__name__)
+
+
 class ParameterFrame(ttk.LabelFrame):
     """Base class for parameter input frames"""
     
@@ -705,6 +952,11 @@ class MainApplication:
         settings_menu.add_command(label="Save Configuration", command=self.save_config)
         settings_menu.add_command(label="Load Configuration", command=self.load_config)
         
+        # Advanced menu
+        advanced_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Advanced", menu=advanced_menu)
+        advanced_menu.add_command(label="Command Console", command=self.show_command_console)
+        
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
@@ -1069,6 +1321,17 @@ class MainApplication:
         """Load configuration"""
         messagebox.showinfo("Info", "Configuration load feature to be implemented")
     
+    def show_command_console(self):
+        """Show the advanced command console"""
+        if not self.keithley:
+            messagebox.showerror("Error", "No instrument connected!\n\nPlease connect to an instrument before using the command console.")
+            return
+        
+        try:
+            CommandConsoleDialog(self.root, self.keithley)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open command console:\n{e}")
+    
     def show_about(self):
         """Show about dialog"""
         messagebox.showinfo(
@@ -1081,7 +1344,8 @@ class MainApplication:
             "• Multi-segment IV sweeps\n"
             "• Time-based current monitoring\n"
             "• Comprehensive data analysis\n"
-            "• Professional data export"
+            "• Professional data export\n"
+            "• Advanced TSP command console"
         )
     
     def run(self):

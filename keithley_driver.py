@@ -243,44 +243,44 @@ class Keithley2634B:
         logger.info("Configuring measurement settings...")
         
         try:
-            # Configure source function (correct TSP syntax)
+            # Configure source function (correct TSP syntax with numeric constants)
             if settings.source_function == SourceFunction.VOLTAGE:
-                self.write(f"{self.smu_name}.source.func = {self.smu_name}.OUTPUT_DCVOLTS")
+                self.write(f"{self.smu_name}.source.func = 1")  # OUTPUT_DCVOLTS = 1
             else:
-                self.write(f"{self.smu_name}.source.func = {self.smu_name}.OUTPUT_DCAMPS")
+                self.write(f"{self.smu_name}.source.func = 0")  # OUTPUT_DCAMPS = 0
             
-            # Configure sense function (correct TSP syntax)
+            # Configure sense function (correct TSP syntax with numeric constants)
             if settings.sense_function == SenseFunction.CURRENT:
-                self.write(f"{self.smu_name}.sense = {self.smu_name}.SENSE_DCAMPS")
+                self.write(f"{self.smu_name}.sense = 1")  # SENSE_DCAMPS = 1
             else:
-                self.write(f"{self.smu_name}.sense = {self.smu_name}.SENSE_DCVOLTS")
+                self.write(f"{self.smu_name}.sense = 0")  # SENSE_DCVOLTS = 0
             
             # Configure source ranges and autorange
             if settings.source_function == SourceFunction.VOLTAGE:
                 if settings.source_autorange:
-                    self.write(f"{self.smu_name}.source.autorangev = {self.smu_name}.AUTORANGE_ON")
+                    self.write(f"{self.smu_name}.source.autorangev = 1")  # AUTORANGE_ON = 1
                 else:
-                    self.write(f"{self.smu_name}.source.autorangev = {self.smu_name}.AUTORANGE_OFF")
+                    self.write(f"{self.smu_name}.source.autorangev = 0")  # AUTORANGE_OFF = 0
                     self.write(f"{self.smu_name}.source.rangev = {settings.source_range}")
             else:
                 if settings.source_autorange:
-                    self.write(f"{self.smu_name}.source.autorangei = {self.smu_name}.AUTORANGE_ON")
+                    self.write(f"{self.smu_name}.source.autorangei = 1")  # AUTORANGE_ON = 1
                 else:
-                    self.write(f"{self.smu_name}.source.autorangei = {self.smu_name}.AUTORANGE_OFF")
+                    self.write(f"{self.smu_name}.source.autorangei = 0")  # AUTORANGE_OFF = 0
                     self.write(f"{self.smu_name}.source.rangei = {settings.source_range}")
             
-            # Configure sense ranges and autorange
+            # Configure measure ranges and autorange
             if settings.sense_function == SenseFunction.CURRENT:
                 if settings.sense_autorange:
-                    self.write(f"{self.smu_name}.measure.autorangei = {self.smu_name}.AUTORANGE_ON")
+                    self.write(f"{self.smu_name}.measure.autorangei = 1")  # AUTORANGE_ON = 1
                 else:
-                    self.write(f"{self.smu_name}.measure.autorangei = {self.smu_name}.AUTORANGE_OFF")
+                    self.write(f"{self.smu_name}.measure.autorangei = 0")  # AUTORANGE_OFF = 0
                     self.write(f"{self.smu_name}.measure.rangei = {settings.sense_range}")
             else:
                 if settings.sense_autorange:
-                    self.write(f"{self.smu_name}.measure.autorangev = {self.smu_name}.AUTORANGE_ON")
+                    self.write(f"{self.smu_name}.measure.autorangev = 1")  # AUTORANGE_ON = 1
                 else:
-                    self.write(f"{self.smu_name}.measure.autorangev = {self.smu_name}.AUTORANGE_OFF")
+                    self.write(f"{self.smu_name}.measure.autorangev = 0")  # AUTORANGE_OFF = 0
                     self.write(f"{self.smu_name}.measure.rangev = {settings.sense_range}")
             
             # Set compliance limits
@@ -294,13 +294,13 @@ class Keithley2634B:
             
             # Configure digital filter
             if settings.filter_enable:
-                self.write(f"{self.smu_name}.measure.filter.enable = {self.smu_name}.FILTER_ON")
+                self.write(f"{self.smu_name}.measure.filter.enable = 1")  # FILTER_ON = 1
                 self.write(f"{self.smu_name}.measure.filter.count = {settings.filter_count}")
             else:
-                self.write(f"{self.smu_name}.measure.filter.enable = {self.smu_name}.FILTER_OFF")
+                self.write(f"{self.smu_name}.measure.filter.enable = 0")  # FILTER_OFF = 0
             
             # Configure output off mode
-            self.write(f"{self.smu_name}.source.offmode = {self.smu_name}.OUTPUT_NORMAL")
+            self.write(f"{self.smu_name}.source.offmode = 0")  # OUTPUT_NORMAL = 0
             
             # Small delay to let settings settle
             time.sleep(0.1)
@@ -313,12 +313,12 @@ class Keithley2634B:
     
     def output_on(self):
         """Turn output on"""
-        self.write(f"{self.smu_name}.source.output = {self.smu_name}.OUTPUT_ON")
+        self.write(f"{self.smu_name}.source.output = 1")  # OUTPUT_ON = 1
         logger.info("Output ON")
     
     def output_off(self):
         """Turn output off"""
-        self.write(f"{self.smu_name}.source.output = {self.smu_name}.OUTPUT_OFF")
+        self.write(f"{self.smu_name}.source.output = 0")  # OUTPUT_OFF = 0
         logger.info("Output OFF")
     
     def set_source_level(self, level: float):
