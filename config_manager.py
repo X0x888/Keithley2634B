@@ -45,6 +45,9 @@ class DataConfig:
     backup_count: int = 5
     file_format: str = "csv"
     compression: bool = False
+    use_date_subfolders: bool = True
+    date_folder_format: str = "%Y%m%d"  # Format: YYYYMMDD
+    allow_custom_paths: bool = True
 
 
 @dataclass

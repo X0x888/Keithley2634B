@@ -222,15 +222,29 @@ class DataManager:
             logger.error(f"Error loading data from {filename}: {e}")
             return None
     
-    def list_data_files(self) -> List[str]:
+    def list_data_files(self, include_subfolders: bool = True) -> List[str]:
         """
         List all CSV data files in the data directory
         
+        Args:
+            include_subfolders: Whether to search in subfolders (date folders)
+            
         Returns:
-            List of CSV filenames
+            List of CSV filenames with relative paths
         """
-        csv_files = list(self.data_directory.glob("*.csv"))
-        return [f.name for f in sorted(csv_files, key=lambda x: x.stat().st_mtime, reverse=True)]
+        csv_files = []
+        
+        # Get files from main directory
+        csv_files.extend(self.data_directory.glob("*.csv"))
+        
+        # Get files from subfolders if requested
+        if include_subfolders:
+            csv_files.extend(self.data_directory.glob("*/*.csv"))
+            csv_files.extend(self.data_directory.glob("*/*/*.csv"))  # Support nested folders
+        
+        # Sort by modification time (newest first) and return relative paths
+        sorted_files = sorted(csv_files, key=lambda x: x.stat().st_mtime, reverse=True)
+        return [str(f.relative_to(self.data_directory)) for f in sorted_files]
     
     def get_file_info(self, filename: str) -> Dict[str, Any]:
         """
@@ -472,18 +486,21 @@ class DataManager:
         cutoff_date = datetime.now() - timedelta(days=days_old)
         deleted_count = 0
         
-        for file_path in self.data_directory.glob("*.csv"):
-            try:
-                if datetime.fromtimestamp(file_path.stat().st_mtime) < cutoff_date:
-                    file_path.unlink()
-                    deleted_count += 1
-                    logger.info(f"Deleted old file: {file_path.name}")
-                    
-                    # Remove from cache
-                    if file_path.name in self.data_cache:
-                        del self.data_cache[file_path.name]
-                    if file_path.name in self.analysis_cache:
-                        del self.analysis_cache[file_path.name]
+        # Clean up files in main directory and subfolders
+        for pattern in ["*.csv", "*/*.csv", "*/*/*.csv"]:
+            for file_path in self.data_directory.glob(pattern):
+                try:
+                    if datetime.fromtimestamp(file_path.stat().st_mtime) < cutoff_date:
+                        file_path.unlink()
+                        deleted_count += 1
+                        logger.info(f"Deleted old file: {file_path.relative_to(self.data_directory)}")
+                        
+                        # Remove from cache (use relative path as key)
+                        relative_path = str(file_path.relative_to(self.data_directory))
+                        if relative_path in self.data_cache:
+                            del self.data_cache[relative_path]
+                        if relative_path in self.analysis_cache:
+                            del self.analysis_cache[relative_path]
                         
             except Exception as e:
                 logger.error(f"Error deleting {file_path.name}: {e}")

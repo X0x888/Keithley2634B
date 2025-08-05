@@ -278,7 +278,7 @@ def main():
         
         # Create and run main application
         logger.info("Starting GUI application...")
-        app = MainApplication()
+        app = MainApplication(config_manager)
         
         # Apply configuration to application
         config = config_manager.current_config

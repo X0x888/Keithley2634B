@@ -58,10 +58,12 @@ class DataAcquisitionEngine:
     Real-time data acquisition engine with concurrent saving
     """
     
-    def __init__(self, keithley: Keithley2634B, save_directory: str = "data"):
+    def __init__(self, keithley: Keithley2634B, save_directory: str = "data", data_config=None):
         self.keithley = keithley
-        self.save_directory = Path(save_directory)
-        self.save_directory.mkdir(exist_ok=True)
+        self.base_save_directory = Path(save_directory)
+        self.base_save_directory.mkdir(exist_ok=True)
+        self.data_config = data_config  # Store data config for folder organization
+        self.save_directory = self.base_save_directory  # Will be updated per measurement
         
         # Data queues for real-time processing
         self.data_queue = queue.Queue()
@@ -88,7 +90,7 @@ class DataAcquisitionEngine:
         self.measurement_start_time: Optional[datetime] = None
         
         # Cache mechanism for data backup
-        self.cache_directory = Path(save_directory) / "cache"
+        self.cache_directory = self.base_save_directory / "cache"
         self.cache_directory.mkdir(exist_ok=True)
         self.cache_file: Optional[Path] = None
         self.cache_handle: Optional[Any] = None
@@ -110,17 +112,61 @@ class DataAcquisitionEngine:
             except Exception as e:
                 logger.error(f"Callback error: {e}")
     
-    def _generate_filename(self, measurement_type: MeasurementType, custom_name: str = "") -> str:
-        """Generate filename for measurement data"""
+    def _generate_filename(self, measurement_type: MeasurementType, custom_name: str = "", custom_path: str = "") -> str:
+        """
+        Generate filename for measurement data with optional date subfolder organization
+        
+        Args:
+            measurement_type: Type of measurement
+            custom_name: Custom prefix for filename
+            custom_path: Custom path (overrides date subfolder if provided)
+            
+        Returns:
+            str: Filename relative to base save directory
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base_name = f"{measurement_type.value}_{timestamp}"
         
+        # Create filename
         if custom_name:
             # Sanitize custom name
             custom_clean = "".join(c for c in custom_name if c.isalnum() or c in "._-")[:50]
-            return f"{custom_clean}_{base_name}.csv"
+            filename = f"{custom_clean}_{base_name}.csv"
         else:
-            return f"{base_name}.csv"
+            filename = f"{base_name}.csv"
+        
+        # Determine save directory
+        if custom_path:
+            # User specified custom path
+            if self.data_config and not self.data_config.allow_custom_paths:
+                logger.warning("Custom paths disabled in configuration, using default organization")
+                save_dir = self._get_date_subfolder()
+            else:
+                # Validate and use custom path
+                custom_path_obj = Path(custom_path)
+                if custom_path_obj.is_absolute():
+                    # Absolute path - use as is but ensure it exists
+                    save_dir = custom_path_obj
+                else:
+                    # Relative path - relative to base save directory
+                    save_dir = self.base_save_directory / custom_path_obj
+        else:
+            # Use default organization (date subfolder if enabled)
+            save_dir = self._get_date_subfolder()
+        
+        # Ensure directory exists
+        save_dir.mkdir(parents=True, exist_ok=True)
+        self.save_directory = save_dir
+        
+        return filename
+    
+    def _get_date_subfolder(self) -> Path:
+        """Get the appropriate date subfolder path"""
+        if self.data_config and self.data_config.use_date_subfolders:
+            date_str = datetime.now().strftime(self.data_config.date_folder_format)
+            return self.base_save_directory / date_str
+        else:
+            return self.base_save_directory
     
     def _init_cache(self, measurement_type: MeasurementType) -> Path:
         """Initialize cache file for data backup"""
@@ -290,7 +336,7 @@ class DataAcquisitionEngine:
     
     def start_iv_sweep(self, sweep_params: SweepParameters, 
                       measurement_settings: MeasurementSettings,
-                      custom_filename: str = "") -> bool:
+                      custom_filename: str = "", custom_path: str = "") -> bool:
         """
         Start IV sweep measurement
         
@@ -311,7 +357,7 @@ class DataAcquisitionEngine:
             
             # Initialize measurement
             self.measurement_start_time = datetime.now()
-            filename = self._generate_filename(MeasurementType.IV_SWEEP, custom_filename)
+            filename = self._generate_filename(MeasurementType.IV_SWEEP, custom_filename, custom_path)
             
             # Initialize cache
             self.cache_file = self._init_cache(MeasurementType.IV_SWEEP)
@@ -496,7 +542,8 @@ class DataAcquisitionEngine:
             logger.info(f"IV sweep completed. Total points: {total_points}")
     
     def start_time_monitor(self, monitor_params: MonitorParameters,
-                          measurement_settings: MeasurementSettings) -> bool:
+                          measurement_settings: MeasurementSettings,
+                          custom_filename: str = "", custom_path: str = "") -> bool:
         """
         Start time monitoring measurement
         
@@ -520,7 +567,7 @@ class DataAcquisitionEngine:
             
             # Initialize measurement
             self.measurement_start_time = datetime.now()
-            filename = self._generate_filename(MeasurementType.TIME_MONITOR)
+            filename = self._generate_filename(MeasurementType.TIME_MONITOR, custom_filename, custom_path)
             
             # Create header
             header = "timestamp,elapsed_time,source_value,measured_value,resistance"

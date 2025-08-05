@@ -998,17 +998,47 @@ class ControlFrame(ttk.Frame):
         ttk.Radiobutton(type_frame, text="Time Monitor", variable=self.measurement_type, 
                        value="time_monitor").pack(side="left", padx=10)
         
-        # Custom filename field
+        # Data file settings with enhanced path options
         filename_frame = ttk.LabelFrame(self, text="Data File Settings", padding="5")
         filename_frame.pack(fill="x", pady=5)
         
-        ttk.Label(filename_frame, text="Custom Name:").pack(side="left", padx=(0, 5))
+        # First row: Custom filename
+        name_row = ttk.Frame(filename_frame)
+        name_row.pack(fill="x", pady=2)
+        
+        ttk.Label(name_row, text="Custom Name:").pack(side="left", padx=(0, 5))
         self.custom_filename_var = tk.StringVar(value="")
-        self.custom_filename_entry = ttk.Entry(filename_frame, textvariable=self.custom_filename_var, width=25)
+        self.custom_filename_entry = ttk.Entry(name_row, textvariable=self.custom_filename_var, width=25)
         self.custom_filename_entry.pack(side="left", padx=(0, 5))
         
-        ttk.Label(filename_frame, text="(will be prefixed to auto-generated name)", 
+        ttk.Label(name_row, text="(prefixed to auto-generated name)", 
                  font=("TkDefaultFont", 8)).pack(side="left", padx=(5, 0))
+        
+        # Second row: Path options
+        path_row = ttk.Frame(filename_frame)
+        path_row.pack(fill="x", pady=2)
+        
+        # Path mode selection
+        self.path_mode_var = tk.StringVar(value="auto")
+        ttk.Radiobutton(path_row, text="Auto (date folder)", variable=self.path_mode_var, 
+                       value="auto", command=self._on_path_mode_change).pack(side="left", padx=(0, 10))
+        ttk.Radiobutton(path_row, text="Custom Path:", variable=self.path_mode_var, 
+                       value="custom", command=self._on_path_mode_change).pack(side="left", padx=(0, 5))
+        
+        # Custom path entry
+        self.custom_path_var = tk.StringVar(value="")
+        self.custom_path_entry = ttk.Entry(path_row, textvariable=self.custom_path_var, width=30, state="disabled")
+        self.custom_path_entry.pack(side="left", padx=(0, 5))
+        
+        # Browse button
+        self.browse_btn = ttk.Button(path_row, text="Browse...", command=self._browse_path, state="disabled", width=8)
+        self.browse_btn.pack(side="left", padx=(0, 5))
+        
+        # Info label
+        self.path_info_var = tk.StringVar(value="Files will be saved to: data/YYYYMMDD/")
+        info_label = ttk.Label(filename_frame, textvariable=self.path_info_var, 
+                              font=("TkDefaultFont", 8), foreground="gray")
+        info_label.pack(anchor="w", pady=(2, 0))
         
         # Control buttons
         btn_frame = ttk.Frame(self)
@@ -1090,6 +1120,49 @@ class ControlFrame(ttk.Frame):
             return False, f"'{filename}' is a reserved filename"
         
         return True, ""
+    
+    def get_custom_path(self) -> str:
+        """Get custom path from entry field"""
+        if self.path_mode_var.get() == "custom":
+            return self.custom_path_var.get().strip()
+        return ""
+    
+    def _on_path_mode_change(self):
+        """Handle path mode radio button changes"""
+        if self.path_mode_var.get() == "custom":
+            self.custom_path_entry.config(state="normal")
+            self.browse_btn.config(state="normal")
+            self._update_path_info()
+        else:
+            self.custom_path_entry.config(state="disabled")
+            self.browse_btn.config(state="disabled")
+            from datetime import datetime
+            date_str = datetime.now().strftime("%Y%m%d")
+            self.path_info_var.set(f"Files will be saved to: data/{date_str}/")
+    
+    def _browse_path(self):
+        """Open directory browser for custom path selection"""
+        from tkinter import filedialog
+        directory = filedialog.askdirectory(
+            title="Select Directory for Data Files",
+            initialdir=self.custom_path_var.get() or "."
+        )
+        if directory:
+            self.custom_path_var.set(directory)
+            self._update_path_info()
+    
+    def _update_path_info(self):
+        """Update the path information label"""
+        if self.path_mode_var.get() == "custom":
+            custom_path = self.custom_path_var.get().strip()
+            if custom_path:
+                self.path_info_var.set(f"Files will be saved to: {custom_path}/")
+            else:
+                self.path_info_var.set("Enter a custom path above")
+        else:
+            from datetime import datetime
+            date_str = datetime.now().strftime("%Y%m%d")
+            self.path_info_var.set(f"Files will be saved to: data/{date_str}/")
     
     def update_sweep_info(self, sweep_info: Dict[str, Any]):
         """Update sweep information display"""
@@ -1176,7 +1249,7 @@ class ControlFrame(ttk.Frame):
 class MainApplication:
     """Main application class"""
     
-    def __init__(self):
+    def __init__(self, config_manager=None):
         self.root = tk.Tk()
         self.root.title("Keithley 2634B IV Measurement System")
         self.root.geometry("1400x900")
@@ -1184,7 +1257,11 @@ class MainApplication:
         # Initialize components
         self.keithley: Optional[Keithley2634B] = None
         self.engine: Optional[DataAcquisitionEngine] = None
-        self.data_manager = DataManager()
+        self.config_manager = config_manager
+        
+        # Initialize data manager with config if available
+        data_dir = config_manager.current_config.data.data_directory if config_manager else "data"
+        self.data_manager = DataManager(data_dir)
         
         # Data update queue for thread-safe GUI updates
         self.data_queue = queue.Queue()
@@ -1361,7 +1438,11 @@ class MainApplication:
             self.keithley = Keithley2634B(resource_name, channel)
             
             if self.keithley.connect():
-                self.engine = DataAcquisitionEngine(self.keithley)
+                # Get data config and save directory
+                data_config = self.config_manager.current_config.data if self.config_manager else None
+                save_dir = data_config.data_directory if data_config else "data"
+                
+                self.engine = DataAcquisitionEngine(self.keithley, save_dir, data_config)
                 self.engine.add_data_callback(self.on_new_data)
                 
                 self.instrument_frame.set_connected(True)
@@ -1559,8 +1640,10 @@ class MainApplication:
             return
         
         try:
-            # Validate custom filename first
+            # Validate custom filename and get custom path
             custom_filename = self.control_frame.get_custom_filename()
+            custom_path = self.control_frame.get_custom_path()
+            
             is_valid, error_msg = self.control_frame.validate_filename(custom_filename)
             if not is_valid:
                 messagebox.showerror("Invalid Filename", error_msg)
@@ -1599,7 +1682,7 @@ class MainApplication:
                     settle_time=float(sweep_values.get("settle_time", 0.0))
                 )
                 
-                if self.engine.start_iv_sweep(sweep_params, settings, custom_filename):
+                if self.engine.start_iv_sweep(sweep_params, settings, custom_filename, custom_path):
                     self.control_frame.set_measuring_state("running")
                 else:
                     messagebox.showerror("Error", "Failed to start IV sweep")
@@ -1612,7 +1695,7 @@ class MainApplication:
                     source_level=float(monitor_values.get("source_level", 0.0))
                 )
                 
-                if self.engine.start_time_monitor(monitor_params, settings):
+                if self.engine.start_time_monitor(monitor_params, settings, custom_filename, custom_path):
                     self.control_frame.set_measuring_state("running")
                 else:
                     messagebox.showerror("Error", "Failed to start time monitoring")
