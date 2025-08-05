@@ -1021,18 +1021,20 @@ class ControlFrame(ttk.Frame):
         # Path mode selection
         self.path_mode_var = tk.StringVar(value="auto")
         ttk.Radiobutton(path_row, text="Auto (date folder)", variable=self.path_mode_var, 
-                       value="auto", command=self._on_path_mode_change).pack(side="left", padx=(0, 10))
-        ttk.Radiobutton(path_row, text="Custom Path:", variable=self.path_mode_var, 
-                       value="custom", command=self._on_path_mode_change).pack(side="left", padx=(0, 5))
+                       value="auto", command=self._on_path_mode_change).pack(side="left", padx=(0, 15))
+        ttk.Radiobutton(path_row, text="Custom folder:", variable=self.path_mode_var, 
+                       value="custom", command=self._on_path_mode_change).pack(side="left", padx=(0, 10))
         
-        # Custom path entry
+        # Folder selection button (replaces text entry)
         self.custom_path_var = tk.StringVar(value="")
-        self.custom_path_entry = ttk.Entry(path_row, textvariable=self.custom_path_var, width=30, state="disabled")
-        self.custom_path_entry.pack(side="left", padx=(0, 5))
+        self.select_folder_btn = ttk.Button(path_row, text="Select Folder...", command=self._select_folder, 
+                                          state="disabled", width=15)
+        self.select_folder_btn.pack(side="left", padx=(0, 10))
         
-        # Browse button
-        self.browse_btn = ttk.Button(path_row, text="Browse...", command=self._browse_path, state="disabled", width=8)
-        self.browse_btn.pack(side="left", padx=(0, 5))
+        # Clear folder button
+        self.clear_folder_btn = ttk.Button(path_row, text="Clear", command=self._clear_folder, 
+                                         state="disabled", width=8)
+        self.clear_folder_btn.pack(side="left", padx=(0, 5))
         
         # Info label
         self.path_info_var = tk.StringVar(value="Files will be saved to: data/YYYYMMDD/")
@@ -1130,35 +1132,45 @@ class ControlFrame(ttk.Frame):
     def _on_path_mode_change(self):
         """Handle path mode radio button changes"""
         if self.path_mode_var.get() == "custom":
-            self.custom_path_entry.config(state="normal")
-            self.browse_btn.config(state="normal")
+            self.select_folder_btn.config(state="normal")
+            self.clear_folder_btn.config(state="normal")
             self._update_path_info()
         else:
-            self.custom_path_entry.config(state="disabled")
-            self.browse_btn.config(state="disabled")
+            self.select_folder_btn.config(state="disabled")
+            self.clear_folder_btn.config(state="disabled")
+            self.custom_path_var.set("")  # Clear custom path when switching to auto
             from datetime import datetime
             date_str = datetime.now().strftime("%Y%m%d")
             self.path_info_var.set(f"Files will be saved to: data/{date_str}/")
     
-    def _browse_path(self):
-        """Open directory browser for custom path selection"""
+    def _select_folder(self):
+        """Open directory browser for custom folder selection"""
         from tkinter import filedialog
         directory = filedialog.askdirectory(
-            title="Select Directory for Data Files",
+            title="Select Folder for Data Files",
             initialdir=self.custom_path_var.get() or "."
         )
         if directory:
             self.custom_path_var.set(directory)
             self._update_path_info()
     
+    def _clear_folder(self):
+        """Clear the selected custom folder"""
+        self.custom_path_var.set("")
+        self._update_path_info()
+    
     def _update_path_info(self):
         """Update the path information label"""
         if self.path_mode_var.get() == "custom":
             custom_path = self.custom_path_var.get().strip()
             if custom_path:
-                self.path_info_var.set(f"Files will be saved to: {custom_path}/")
+                # Show a shortened path if it's too long
+                display_path = custom_path
+                if len(display_path) > 60:
+                    display_path = "..." + display_path[-57:]
+                self.path_info_var.set(f"Files will be saved to: {display_path}/")
             else:
-                self.path_info_var.set("Enter a custom path above")
+                self.path_info_var.set("Click 'Select Folder...' to choose a custom save location")
         else:
             from datetime import datetime
             date_str = datetime.now().strftime("%Y%m%d")
