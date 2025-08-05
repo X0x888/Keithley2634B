@@ -1,0 +1,35 @@
+---
+alwaysApply: true
+---
+
+## ⚠️ **CRITICAL: Development Environment Warning**
+
+**🚫 DO NOT RUN PYTHON CODE ON THIS MAC**
+
+This development guide is for a **two-machine setup**:
+
+- **🖥️ Mac (Development Machine)**: Code editing, documentation, version control **ONLY**
+  - ❌ **Never run `python main.py` or any Python scripts**
+  - ❌ **Never install Python dependencies with `pip install`**
+  - ❌ **Never test instrument connections**
+  - ✅ **Use for code editing, Git operations, documentation only**
+
+- **💻 Windows Laptop (Production Machine)**: Actual program execution
+  - ✅ **Run all Python scripts and testing here**
+  - ✅ **Connected to Keithley 2634B via GPIB**
+  - ✅ **Has NI-VISA drivers and Python environment**
+
+This project provides a comprehensive Python-based control system for the Keithley 2634B SourceMeter with a modern GUI interface, real-time data visualization, and robust measurement capabilities.
+
+### Key Design Principles
+1. **Separation of Concerns**: Driver, engine, and GUI are loosely coupled
+2. **Thread Safety**: Concurrent measurement, saving, and GUI updates
+3. **Data Integrity**: Robust caching and recovery mechanisms
+4. **User Experience**: Responsive GUI with real-time feedback
+5. **Error Handling**: Comprehensive logging and graceful error recovery
+
+### Thread Safety Rules
+1. **Never block GUI thread** - use queues for communication
+2. **Use threading.Event** for pause/resume control
+3. **Atomic state changes** - update flags consistently
+4. **Proper cleanup** - always join threads with timeout
