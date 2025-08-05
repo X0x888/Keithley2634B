@@ -502,8 +502,8 @@ class DataManager:
                         if relative_path in self.analysis_cache:
                             del self.analysis_cache[relative_path]
                         
-            except Exception as e:
-                logger.error(f"Error deleting {file_path.name}: {e}")
+                except Exception as e:
+                    logger.error(f"Error deleting {file_path.name}: {e}")
         
         return deleted_count
 
